@@ -24,6 +24,7 @@ PPO_PARAMS = (
     "clip_eps",
     "clip_eps_vf",
     "init_std",
+    "init_std_motors",
     "learnable_std",
     "ent_coef",
     "vf_coef",

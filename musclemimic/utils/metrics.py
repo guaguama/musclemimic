@@ -272,21 +272,13 @@ class MetricsHandler:
         Calculate per-arm metrics by splitting site-based quantities into left/right arms
         (using configured arm site indices) and applying the provided distance function.
         """
+        # Match get_zero_container's per-quantity shape so the _evaluation_step and
+        # _skip_evaluation branches of jax.lax.cond yield identical structures for
+        # arm-less envs (e.g. MyoLeg80_OSL_KA). Without this, enabled quantities
+        # would emit float32[0] here vs float32[] in the skip branch.
         if self._left_arm_site_indices is None or self._right_arm_site_indices is None:
-            empty_container = QuantityContainer(
-                qpos=jnp.empty(0),
-                qvel=jnp.empty(0),
-                xpos=jnp.empty(0),
-                xrotvec=jnp.empty(0),
-                cvel=jnp.empty(0),
-                site_xpos=jnp.empty(0),
-                site_xrotvec=jnp.empty(0),
-                site_xvel=jnp.empty(0),
-                site_rpos=jnp.empty(0),
-                site_rrotvec=jnp.empty(0),
-                site_rvel=jnp.empty(0),
-            )
-            return empty_container, empty_container
+            zero_container = self.get_zero_container().euclidean_distance
+            return zero_container, zero_container
 
         # Helper function to extract arm-specific sites from quantities
         def extract_arm_sites(quantity_arr, arm_indices):
@@ -306,20 +298,8 @@ class MetricsHandler:
             and container.site_rvel.size == 0
         )
         if site_arrays_empty:
-            empty_container = QuantityContainer(
-                qpos=jnp.empty(0),
-                qvel=jnp.empty(0),
-                xpos=jnp.empty(0),
-                xrotvec=jnp.empty(0),
-                cvel=jnp.empty(0),
-                site_xpos=jnp.empty(0),
-                site_xrotvec=jnp.empty(0),
-                site_xvel=jnp.empty(0),
-                site_rpos=jnp.empty(0),
-                site_rrotvec=jnp.empty(0),
-                site_rvel=jnp.empty(0),
-            )
-            return empty_container, empty_container
+            zero_container = self.get_zero_container().euclidean_distance
+            return zero_container, zero_container
 
         # Extract left arm data
         left_container = QuantityContainer(

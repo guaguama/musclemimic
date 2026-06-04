@@ -196,6 +196,10 @@ class MimicReward(TrajectoryBasedReward):
         self._joint_torque_coeff = kwargs.get("joint_torque_coeff", 0.0)
         self._action_rate_coeff = kwargs.get("action_rate_coeff", 0.0)
         self._activation_energy_coeff = kwargs.get("activation_energy_coeff", 0.0)
+        # Optional per-joint additive torque penalty: dict[joint_name, weight].
+        # Joints not listed contribute 0 (so behavior for unlisted joints is unchanged).
+        # The vector is materialized below once the mujoco model is available.
+        self._joint_torque_weights_dict = dict(kwargs.get("joint_torque_weights", {}) or {})
         # Root velocity tracking: [vx_local, vy_local, yaw_rate]
         self._root_vel_w_exp = kwargs.get("root_vel_w_exp", 10.0)
         self._root_vel_w_sum = kwargs.get("root_vel_w_sum", 0.2)
@@ -253,7 +257,17 @@ class MimicReward(TrajectoryBasedReward):
             # For bimanual models without a free joint, create empty mask
             self._free_joint_qvel_ind = np.array([], dtype=int)
             self._free_joint_qvel_mask = np.zeros(model.nv, dtype=bool)
-        
+
+        # Build the per-joint torque weight vector (zeros + listed joints).
+        if self._joint_torque_weights_dict:
+            weight_vec = np.zeros(model.nv, dtype=np.float32)
+            for jname, w in self._joint_torque_weights_dict.items():
+                qvel_id = mj_jntname2qvelid(jname, model)
+                weight_vec[qvel_id] = float(w)
+            self._joint_torque_weight_vec = weight_vec
+        else:
+            self._joint_torque_weight_vec = None
+
         # Initialize site mapper for trajectory index mapping
         env_sites_for_mimic = getattr(env, 'sites_for_mimic', [])
         traj_site_names = env.th.traj.info.site_names if (hasattr(env, 'th') and env.th is not None) else None
@@ -566,6 +580,15 @@ class MimicReward(TrajectoryBasedReward):
         else:
             torque_penalty = 0.0
 
+        # per-joint additive torque penalty (weights carry magnitude; coefficient is 1)
+        if self._joint_torque_weight_vec is not None:
+            weighted_torque_norm = backend.sum(
+                self._joint_torque_weight_vec * backend.square(data.qfrc_actuator)
+            )
+            weighted_torque_penalty = -weighted_torque_norm
+        else:
+            weighted_torque_penalty = 0.0
+
         # action rate penalty
         if self._action_rate_coeff > 0.0:
             action_rate_norm = backend.sum(backend.square(action - reward_state.last_action))
@@ -584,6 +607,7 @@ class MimicReward(TrajectoryBasedReward):
         total_penalities = (self._action_out_of_bounds_coeff * out_of_bound_reward
                             + self._joint_acc_coeff * acceleration_penalty
                             + self._joint_torque_coeff * torque_penalty
+                            + weighted_torque_penalty
                             + self._action_rate_coeff * action_rate_penalty
                             + self._activation_energy_coeff * activation_energy_penalty)
         total_penalities = backend.maximum(total_penalities, -1.0)

@@ -1,0 +1,346 @@
+# =============================================================================
+# Standalone training config for MyoLeg80_OSL_KA (transfemoral OSL prosthetic).
+#
+# This file used to inherit from conf_fullbody_gmr → conf_fullbody. It has been
+# flattened so every training parameter is visible and editable in one place
+# without affecting MyoFullBody training.
+#
+# Last synced from conf_fullbody.yaml + conf_fullbody_gmr.yaml @ a38061b.
+# If those upstream files change, you must manually re-merge — Hydra will NOT
+# pull the updates automatically.
+#
+# Sections likely to be tuned for OSL training:
+#   - experiment.env_params.terminal_state_params  → termination thresholds
+#   - experiment.env_params.num_envs               → GPU memory / throughput
+#   - experiment.env_params.reward_params          → reward shaping weights
+#   - experiment.actor_hidden_layers / critic_*    → network width/depth
+#   - experiment.ppo_config                        → PPO hyperparameters
+#   - experiment.adaptive_termination              → opt-in curriculum
+#
+# Usage:
+#   uv run fullbody/experiment.py --config-name=conf_myoleg80_osl_ka
+# =============================================================================
+
+defaults:
+  - override hydra/job_logging: default
+  - override hydra/launcher: basic
+
+# =============================================================================
+# Weights & Biases
+# =============================================================================
+wandb:
+  project: "musclemimic"
+  mode: "online"  # Options: online, offline, disabled
+  tags: ["fullbody", "myoleg80_osl_ka", "gmr", "forward_walking"]
+
+experiment:
+  # ===========================================================================
+  # Task factory — trajectory selection and GMR retargeting
+  # ===========================================================================
+  task_factory:
+    name: ImitationFactory
+    params:
+      amass_dataset_conf:
+        # Pre-curated forward-walking subset (loco_mujoco/smpl/const.py).
+        dataset_group: "KIT_KINESIS_TRAINING_MOTIONS_MINT_STRAIGHT_FORWARDS"
+        retargeting_method: gmr
+        gmr_config:
+          src_human: smplh
+          target_fps: 30
+          solver: daqp
+          damping: 0.5
+          offset_to_ground: false
+          use_velocity_limit: false
+          use_fitted_shape: true  # Auto-fit SMPL shape to robot
+          shape_fitting_iterations: 500
+
+  # ===========================================================================
+  # Environment
+  # ===========================================================================
+  env_params:
+    env_name: MjxMyoLeg80_OSL_KA
+    headless: True
+    horizon: 1000
+    disable_fingers: false  # OSL_KA has no fingers; nothing to disable.
+    mjx_backend: warp
+    num_envs: 2048
+
+    # Observations
+    enable_muscle_length_observations: true
+    enable_muscle_velocity_observations: true
+    enable_muscle_force_observations: true
+    enable_muscle_excitation_observations: true
+    enable_muscle_activation_observations: true
+    enable_touch_sensor_observations: true
+
+    init_state_type: TrajInitialStateHandler
+
+    # -------------------------------------------------------------------------
+    # Goal — what the policy is conditioned on
+    # -------------------------------------------------------------------------
+    goal_type: GoalTrajMimic
+    goal_params:
+      n_step_lookahead: 5
+      n_step_stride: 20
+      upper_body_xml_name: torso
+      enable_motion_phase: true        # Include motion phase [0,1] in goal observation
+      use_concise_lookahead: true      # Use root_pos/vel deltas + site_rpos only (smaller obs)
+      sites_for_mimic:                 # 9 lower-body sites (no head/arms — OSL_KA is lower-body only)
+        - pelvis_mimic
+        - left_hip_mimic
+        - left_knee_mimic
+        - left_ankle_mimic
+        - left_toes_mimic
+        - right_hip_mimic
+        - right_knee_mimic
+        - right_ankle_mimic
+        - right_toes_mimic
+
+    # -------------------------------------------------------------------------
+    # Control
+    # -------------------------------------------------------------------------
+    control_type: ${control_config.torque_control.control_type}
+    control_params: ${control_config.torque_control.control_params}
+
+    # -------------------------------------------------------------------------
+    # Reward
+    # -------------------------------------------------------------------------
+    reward_type: MimicReward
+    reward_params:
+      qpos_w_sum: 0.1
+      qvel_w_sum: 0.1
+      root_pos_w_sum: 0.1
+      root_vel_w_sum: 0.1
+      rpos_w_sum: 0.6
+      rquat_w_sum: 0.01
+      rvel_w_sum: 0.1
+      action_rate_coeff: 0.0
+      activation_energy_coeff: 0.0
+      # Per-joint additive torque penalty: weight * sum(qfrc_actuator^2) per joint.
+      # Targets the OSL prosthetic motors (49.4x / 58.4x gear) so they stop driving
+      # the model into the floor in early training. Other joints are unweighted.
+      joint_torque_weights:
+        osl_knee_angle_r: 0 #1.0e-5
+        osl_ankle_angle_r: 0 #1.0e-5
+      use_mean_exp_reward: false
+      sites_for_mimic:
+        - pelvis_mimic
+        - left_hip_mimic
+        - left_knee_mimic
+        - left_ankle_mimic
+        - left_toes_mimic
+        - right_hip_mimic
+        - right_knee_mimic
+        - right_ankle_mimic
+        - right_toes_mimic
+
+    # -------------------------------------------------------------------------
+    # Termination — relax for early OSL learning if the policy never escapes
+    # the floor (e.g., raise mean_site_deviation_threshold to 1.5–2.0)
+    # -------------------------------------------------------------------------
+    terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
+    terminal_state_params:
+      mean_site_deviation_threshold: 1.0  # meters
+      root_deviation_threshold: 1.0       # meters
+      root_orientation_threshold: 1.0     # radians
+      enable_site_check: true
+
+  # ===========================================================================
+  # Algorithm
+  # ===========================================================================
+  algorithm: PPOJax
+
+  # ---------------------------------------------------------------------------
+  # Network architecture (GMR-tuned: 12x1024 + 3x2048 + 1x1024)
+  # ---------------------------------------------------------------------------
+  actor_hidden_layers: [1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 2048, 2048, 2048, 1024]
+  critic_hidden_layers: [1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 2048, 2048, 2048, 1024]
+  activation: silu
+
+  # ---------------------------------------------------------------------------
+  # Training schedule
+  # ---------------------------------------------------------------------------
+  lr: 4e-4
+  num_envs: ${experiment.env_params.num_envs}
+  total_timesteps: 2048000000
+  max_grad_norm: 1.0
+  anneal_lr: true
+  lr_schedule_type: "linear"
+  warmup_steps: null
+  min_lr_ratio: 0.1
+  weight_decay: 0
+  normalize_env: true
+  debug:
+    enabled: false
+    profile_traj_batch: false
+    profile_val_batch: false
+    track_nacon: false
+
+  # ---------------------------------------------------------------------------
+  # Optimizer
+  # ---------------------------------------------------------------------------
+  optimizer_type: "muon"
+  muon_config:
+    beta: 0.95
+    nesterov: true
+    ns_steps: 5
+    adaptive: false
+
+  # ---------------------------------------------------------------------------
+  # PPO hyperparameters
+  # ---------------------------------------------------------------------------
+  ppo_config:
+    num_steps: 80
+    update_epochs: 1
+    num_minibatches: 128
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_eps: 0.2
+    clip_eps_vf: 0.2
+    # Muscle dims start at 3.0 (matching conf_fullbody). Motor dims (OSL knee/ankle)
+    # are pinned much lower so a single Gaussian draw doesn't saturate the geared
+    # actuators in step 1. learnable_std=true lets the policy raise it later.
+    init_std: 3.0
+    init_std_motors: 3.0
+    learnable_std: true
+    ent_coef: 0.0
+    vf_coef: 0.5
+
+  # ---------------------------------------------------------------------------
+  # LayerNorm
+  # ---------------------------------------------------------------------------
+  use_layernorm: true
+  layernorm_eps: 1e-5
+
+  # ---------------------------------------------------------------------------
+  # MoE (disabled)
+  # ---------------------------------------------------------------------------
+  use_moe: false
+  moe_config:
+    num_experts: 16
+    moe_at_layers: [3]
+    apply_moe_to: "both"
+    apply_moe_to_output: false
+    expert_hidden_ratio: 0.5
+    temperature: 0.5
+    load_balance_loss_weight: 0.01
+    gate_init_std: 0.01
+
+  # ---------------------------------------------------------------------------
+  # Seeds and checkpointing
+  # ---------------------------------------------------------------------------
+  n_seeds: 1
+  seeds: null
+  vmap_across_seeds: false
+  save_checkpoints: true
+  max_checkpoints_to_keep: 10
+  checkpoints_on_validation: true
+  resume_from: null
+  async_checkpointing: false
+  reset_logging_timestep: false
+  reset_lr_schedule_on_resume: false
+
+  # ---------------------------------------------------------------------------
+  # Auto-resume (preemption robustness)
+  # ---------------------------------------------------------------------------
+  auto_resume: true
+  run_id: null
+  checkpoint_root: null
+
+  # ---------------------------------------------------------------------------
+  # Adaptive termination threshold curriculum (one-way ratchet, OFF by default)
+  # NOTE: starts TIGHTER than the static threshold above (0.5m vs 1.0m), so
+  # only enable once the policy can already walk under the static setting.
+  # ---------------------------------------------------------------------------
+  adaptive_termination:
+    enabled: false
+    init_threshold: 0.5     # Starting threshold (meters) - also max due to ratchet
+    low_band: 0.10          # <10%: decrease threshold (harder)
+    high_band: 0.20         # >20%: increase threshold (up to init)
+    adjust_factor: 0.95     # thr *= factor (decrease) or /= factor (increase)
+    consecutive_k: 5        # Require K consecutive updates on same side before adjusting
+    min_threshold: 0.1      # Minimum threshold (meters)
+    ema_alpha: 0.1          # EMA smoothing for rate estimation
+
+  # ---------------------------------------------------------------------------
+  # Reward curriculum — boosts qvel/root_vel weights once stable
+  # ---------------------------------------------------------------------------
+  reward_curriculum:
+    enabled: false
+    qvel_w_sum_init: 0.1
+    root_vel_w_sum_init: 0.1
+    qvel_w_sum_max: 0.4
+    root_vel_w_sum_max: 0.4
+    eta: 0.02
+    ema_alpha: 0.2
+    term_rate_threshold: 0.08
+    consecutive_k: 5
+
+  # ---------------------------------------------------------------------------
+  # Adaptive trajectory sampling — prioritize trajectories with high early-term rate
+  # ---------------------------------------------------------------------------
+  adaptive_sampling:
+    enabled: false
+    beta: 0.2
+    alpha: 1.0
+    floor_mix: 0.1
+    eps_div: 1e-6
+    eps_pow: 1e-6
+    ema_done_init: 10.0
+    ema_early_init: 5.0
+
+  # ===========================================================================
+  # Validation
+  # NOTE: validation set == training set (forward-walking). Swap to a held-out
+  # group for honest generalization metrics once initial training works.
+  # ===========================================================================
+  validation:
+    active: true
+    deterministic: false
+    num_steps: 500
+    num_envs: 100
+    num: 100
+    video_length: 3000
+    video_frequency: 1
+    amass_dataset_conf:
+      dataset_group: "KIT_KINESIS_TRAINING_MOTIONS_MINT_STRAIGHT_FORWARDS"
+      retargeting_method: gmr
+      gmr_config:
+        src_human: smplh
+        target_fps: 30
+        solver: daqp
+        damping: 0.5
+        offset_to_ground: false
+        use_velocity_limit: false
+        use_fitted_shape: true
+        shape_fitting_iterations: 500
+    terminal_state_type: MeanRelativeSiteDeviationTerminalStateHandler
+    terminal_state_params:
+      mean_site_deviation_threshold: 0.5
+      enable_site_check: true
+    quantities:
+      - JointPosition
+      - JointVelocity
+      - RelSitePosition
+      - RelSiteVelocity
+      - RelSiteOrientation
+    measures:
+      - EuclideanDistance
+    rel_site_names:
+      - pelvis_mimic
+      - left_hip_mimic
+      - left_knee_mimic
+      - left_ankle_mimic
+      - left_toes_mimic
+      - right_hip_mimic
+      - right_knee_mimic
+      - right_ankle_mimic
+      - right_toes_mimic
+
+# =============================================================================
+# Control configuration (referenced by experiment.env_params.control_*)
+# =============================================================================
+control_config:
+  torque_control:
+    control_type: DefaultControl
+    control_params: {}

@@ -385,9 +385,11 @@ def build_logging_callback(env, config, agent_conf, use_wandb, hooks: Experiment
                     if video_path:
                         logger.info(f"Validation video recorded: {video_path}")
                     hooks.on_validation_video(use_wandb, _wandb, video_path, current_timestep)
-                except Exception as e:
-                    # Video failures should not interrupt training.
-                    logger.warning(f"Video recording failed: {e}")
+                except Exception:
+                    # Video failures should not interrupt training. Log full
+                    # traceback so the failing line is visible (the message
+                    # alone is rarely enough to diagnose).
+                    logger.warning("Video recording failed:", exc_info=True)
 
     return _cb
 

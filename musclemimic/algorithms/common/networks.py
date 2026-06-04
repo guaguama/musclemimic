@@ -168,7 +168,10 @@ class ResidualFCNet(nn.Module):
 class ActorCritic(nn.Module):
     action_dim: Sequence[int]
     activation: str = "tanh"
-    init_std: float = 1.0
+    # init_std: scalar (broadcast to all action dims) OR sequence of length action_dim
+    # (used as-is). A sequence lets you set different exploration noise per dim
+    # — e.g. lower std on motor actuators that would otherwise saturate in step 1.
+    init_std: float | Sequence[float] = 1.0
     learnable_std: bool = True
     hidden_layer_dims: Sequence[int] = (1024, 512)
     critic_hidden_layer_dims: Sequence[int] | None = None
@@ -214,8 +217,20 @@ class ActorCritic(nn.Module):
                 layernorm_eps=self.layernorm_eps,
                 name="actor",
             )(actor_x)
-        actor_logtstd = self.param("log_std", nn.initializers.constant(jnp.log(self.init_std)),
-                                   (self.action_dim,))
+        init_std_arr = jnp.asarray(self.init_std, dtype=jnp.float32)
+        if init_std_arr.ndim == 0:
+            log_std_init_fn = nn.initializers.constant(jnp.log(init_std_arr))
+        else:
+            if init_std_arr.shape != (self.action_dim,):
+                raise ValueError(
+                    f"init_std array shape {init_std_arr.shape} does not match "
+                    f"action_dim ({self.action_dim},)"
+                )
+            _log_std_const = jnp.log(init_std_arr)
+
+            def log_std_init_fn(key, shape, dtype=jnp.float32):
+                return _log_std_const.astype(dtype)
+        actor_logtstd = self.param("log_std", log_std_init_fn, (self.action_dim,))
         if not self.learnable_std:
             actor_logtstd = jax.lax.stop_gradient(actor_logtstd)
 

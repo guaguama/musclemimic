@@ -20,7 +20,7 @@ def parse_arguments():
     # Model configuration
     parser.add_argument(
         "--model",
-        choices=["MyoBimanualArm", "MyoFullBody"],
+        choices=["MyoBimanualArm", "MyoFullBody", "MyoLeg80_OSL_KA"],
         default="MyoFullBody",
         help="Model type to use",
     )
@@ -145,6 +145,9 @@ def main():
         env_params["goal_type"] = "GoalBimanualTrajMimicv2"
         env_params["goal_params"] = goal_params
     elif args.model == "MyoFullBody":
+        env_params["goal_type"] = "GoalTrajMimicv2"
+        env_params["goal_params"] = goal_params
+    elif args.model == "MyoLeg80_OSL_KA":
         env_params["goal_type"] = "GoalTrajMimicv2"
         env_params["goal_params"] = goal_params
 

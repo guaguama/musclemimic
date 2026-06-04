@@ -1,0 +1,60 @@
+# Short OSL KA diagnostic training overlay.
+#
+# Usage:
+#   uv run fullbody/experiment.py --config-name=conf_myoleg80_osl_ka_debug
+#
+# This file intentionally inherits the main OSL KA config instead of editing it.
+# It makes validation deterministic and frequent so episode length changes are
+# visible quickly during diagnosis.
+
+defaults:
+  - conf_myoleg80_osl_ka
+  - _self_
+
+wandb:
+  mode: "disabled"
+  tags: ["fullbody", "myoleg80_osl_ka", "debug", "episode_length"]
+
+experiment:
+  env_params:
+    num_envs: 16
+    horizon: 300
+    # Toggle these in CLI overrides when comparing fixed-start and random-start
+    # behavior, e.g. experiment.env_params.th_params.random_start=false.
+    th_params:
+      random_start: true
+      start_from_random_step: true
+
+  total_timesteps: 4096
+  online_logging_interval: 1
+  save_checkpoints: false
+  checkpoints_on_validation: false
+  save_checkpoints_on_validation: false
+  auto_resume: false
+
+  ppo_config:
+    num_steps: 16
+    update_epochs: 1
+    num_minibatches: 4
+
+  debug:
+    enabled: true
+    profile_traj_batch: true
+    profile_val_batch: true
+    track_nacon: false
+
+  validation:
+    active: true
+    deterministic: true
+    num_steps: 128
+    num_envs: 8
+    num: 16
+    video_length: 240
+    video_frequency: 1
+    start_from_beginning: true
+    # Deterministic validation default: trajectory 0, frame 0. Override these
+    # keys to test random validation starts without changing the main config.
+    th_params:
+      random_start: false
+      fixed_start_conf: [0, 0]
+      start_from_random_step: false

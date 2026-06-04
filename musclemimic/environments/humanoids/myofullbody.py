@@ -354,6 +354,11 @@ class MyoFullBody(LocoEnv):
 
         # Add muscle observations if enabled
         for actuator in spec.actuators:
+            # Muscle-specific observations only apply to muscle-type actuators.
+            # Skipping motors (e.g. OSL prosthetic motors) prevents IndexErrors
+            # in the CPU obs path where data.act is sized to muscle count only.
+            if actuator.dyntype != mujoco.mjtDyn.mjDYN_MUSCLE:
+                continue
             actuator_name = actuator.name
 
             # Add muscle length observations

@@ -460,6 +460,14 @@ class LocoEnv(Mjx):
 
         key, subkey = jax.random.split(key)
         self.reset(subkey)
+        # play_trajectory is a deterministic preview tool. Override the handler's
+        # random-start logic so each episode replays from frame 0 of the chosen
+        # trajectory regardless of what reset() picked.
+        self._additional_carry = self._additional_carry.replace(
+            traj_state=self._additional_carry.traj_state.replace(
+                subtraj_step_no=0, subtraj_step_no_init=0,
+            )
+        )
         subtraj_step_no = 0
         traj_data_sample = self.th.get_current_traj_data(self._additional_carry, np)
 
@@ -538,6 +546,12 @@ class LocoEnv(Mjx):
 
             key, subkey = jax.random.split(key)
             self.reset(subkey)
+            self._additional_carry = self._additional_carry.replace(
+                traj_state=self._additional_carry.traj_state.replace(
+                    subtraj_step_no=0, subtraj_step_no_init=0,
+                )
+            )
+            traj_data_sample = self.th.get_current_traj_data(self._additional_carry, np)
 
         self.stop()
         if record:

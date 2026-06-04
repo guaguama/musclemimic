@@ -89,8 +89,8 @@ class ValidationVideoRecorder:
             env_params["goal_type"] = "GoalBimanualTrajMimicv2"
             if sites:
                 env_params["goal_params"]["sites_for_mimic"] = sites
-        elif "MyoFullBody" in env_name:
-            # Fullbody uses GoalTrajMimicv2.
+        elif "MyoFullBody" in env_name or "MyoLeg" in env_name:
+            # MyoFullBody and MyoLeg variants (e.g. MyoLeg80_OSL_KA) use GoalTrajMimicv2.
             env_params["goal_type"] = "GoalTrajMimicv2"
             if sites:
                 env_params["goal_params"]["sites_for_mimic"] = sites

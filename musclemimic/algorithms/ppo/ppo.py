@@ -123,6 +123,12 @@ class PPOJax(JaxRLAlgorithmBase):
         actor_hidden = cls._parse_hidden_layers(exp.actor_hidden_layers)
         critic_hidden = cls._parse_hidden_layers(exp.critic_hidden_layers)
 
+        # Resolve init_std: scalar or per-dim. If init_std_motors is set, build a
+        # length-action_dim list with the motor value at non-muscle actuator positions
+        # and the scalar init_std elsewhere.
+        action_dim = env.info.action_space.shape[0]
+        init_std_resolved = cls._resolve_init_std(env, exp, action_dim)
+
         # observation indices for actor/critic
         if hasattr(exp, "actor_obs_group") and exp.actor_obs_group is not None:
             actor_obs_ind = env.obs_container.get_obs_ind_by_group(exp.actor_obs_group)
@@ -150,9 +156,9 @@ class PPOJax(JaxRLAlgorithmBase):
         if use_moe:
             moe_config = exp.get("moe_config", {})
             return SoftMoEActorCritic(
-                action_dim=env.info.action_space.shape[0],
+                action_dim=action_dim,
                 activation=exp.activation,
-                init_std=exp.init_std,
+                init_std=init_std_resolved,
                 learnable_std=exp.learnable_std,
                 hidden_layer_dims=actor_hidden,  # moe uses same for both
                 actor_obs_ind=actor_obs_ind,
@@ -167,9 +173,9 @@ class PPOJax(JaxRLAlgorithmBase):
             )
         else:
             return ActorCritic(
-                env.info.action_space.shape[0],
+                action_dim,
                 activation=exp.activation,
-                init_std=exp.init_std,
+                init_std=init_std_resolved,
                 learnable_std=exp.learnable_std,
                 hidden_layer_dims=actor_hidden,
                 critic_hidden_layer_dims=critic_hidden if critic_hidden != actor_hidden else None,
@@ -188,6 +194,41 @@ class PPOJax(JaxRLAlgorithmBase):
         if isinstance(layers, list | ListConfig):
             return list(layers)
         return ast.literal_eval(layers)
+
+    @classmethod
+    def _resolve_init_std(cls, env: Any, exp: Any, action_dim: int):
+        """Build the actor-critic init_std as scalar or per-dim list.
+
+        If `init_std_motors` is set in the config, walk the env's actuator spec
+        and overwrite non-muscle (motor) actuator positions with that value, leaving
+        muscle dims at the scalar `init_std`. Returns the scalar unchanged when no
+        motor override is configured.
+        """
+        init_std_scalar = float(exp.init_std)
+        init_std_motors = exp.get("init_std_motors", None)
+        if init_std_motors is None:
+            return init_std_scalar
+
+        # Need raw mujoco model + action indices, which live on the unwrapped env.
+        base_env = env
+        unwrap = getattr(env, "unwrapped", None)
+        if unwrap is not None:
+            base_env = unwrap() if callable(unwrap) else unwrap
+        model = getattr(base_env, "_model", None)
+        action_indices = getattr(base_env, "_action_indices", None)
+        if model is None or action_indices is None:
+            raise RuntimeError(
+                "init_std_motors set but env does not expose _model / _action_indices "
+                "on its unwrapped form."
+            )
+
+        import mujoco
+        muscle_dyntype = mujoco.mjtDyn.mjDYN_MUSCLE
+        per_dim = [init_std_scalar] * action_dim
+        for dim_idx, act_id in enumerate(action_indices):
+            if int(model.actuator_dyntype[act_id]) != int(muscle_dyntype):
+                per_dim[dim_idx] = float(init_std_motors)
+        return per_dim
 
     @classmethod
     def _get_optimizer(cls, config: Any):

@@ -1,0 +1,62 @@
+# MyoLeg80_OSL_KA robot configuration for SMPL retargeting
+#
+# 80-muscle transfemoral OSL prosthetic model: biological L leg, OSL R leg,
+# rigid passive torso. Tracks 9 lower-body sites only — no head/torso/arm
+# sites because those bodies don't exist in this model.
+#
+# Note: this YAML is required by load_retargeted_amass_trajectory() at
+# import time even when serving from a cached .npz, but the actual
+# retargeting it parameterizes is only invoked on cache miss.
+site_joint_matches:
+  pelvis_mimic:
+    smpl_joint: "Pelvis"
+    equality_constraint_type: mjEQ_WELD
+    torque_scale: 1.0
+
+  left_hip_mimic:
+    smpl_joint: "L_Hip"
+    equality_constraint_type: mjEQ_WELD
+    torque_scale: 1.0
+  left_knee_mimic:
+    smpl_joint: "L_Knee"
+    equality_constraint_type: mjEQ_WELD
+    torque_scale: 1.0
+  left_ankle_mimic:
+    smpl_joint: "L_Ankle"
+    equality_constraint_type: mjEQ_WELD
+    torque_scale: 1.0
+  left_toes_mimic:
+    smpl_joint: "L_Toe"
+    equality_constraint_type: mjEQ_WELD
+    torque_scale: 1.0
+
+  right_hip_mimic:
+    smpl_joint: "R_Hip"
+    equality_constraint_type: mjEQ_WELD
+    torque_scale: 1.0
+  right_knee_mimic:
+    smpl_joint: "R_Knee"
+    equality_constraint_type: mjEQ_WELD
+    torque_scale: 1.0
+  right_ankle_mimic:
+    smpl_joint: "R_Ankle"
+    equality_constraint_type: mjEQ_WELD
+    torque_scale: 1.0
+  right_toes_mimic:
+    smpl_joint: "R_Toe"
+    equality_constraint_type: mjEQ_WELD
+    torque_scale: 1.0
+
+robot_pose_modifier:
+  - root: "[0 , 0, np.pi]"
+
+optimization_params:
+  z_offset_feet: -0.05
+  shape_iterations: 1000
+  shape_lr: 0.01
+  pose_lr: 0.01
+  motion_iterations: 100
+
+env_params:
+  timestep: 0.002
+  n_substeps: 5

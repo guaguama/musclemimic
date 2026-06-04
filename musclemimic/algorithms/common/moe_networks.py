@@ -142,7 +142,9 @@ class SoftMoEActorCritic(nn.Module):
 
     action_dim: int
     activation: str = "tanh"
-    init_std: float = 1.0
+    # init_std: scalar (broadcast to all action dims) OR sequence of length action_dim
+    # (used as-is). See ActorCritic for details.
+    init_std: float | Sequence[float] = 1.0
     learnable_std: bool = True
     hidden_layer_dims: Sequence[int] = (1024, 512)
     actor_obs_ind: jnp.ndarray | None = None
@@ -279,8 +281,21 @@ class SoftMoEActorCritic(nn.Module):
         else:
             actor_mean = self._build_network(actor_x, is_actor=True, return_metrics=False)
 
-        # Actor std
-        actor_logtstd = self.param("log_std", nn.initializers.constant(jnp.log(self.init_std)), (self.action_dim,))
+        # Actor std (scalar broadcasts; vector is used as-is — see ActorCritic for the same pattern).
+        init_std_arr = jnp.asarray(self.init_std, dtype=jnp.float32)
+        if init_std_arr.ndim == 0:
+            log_std_init_fn = nn.initializers.constant(jnp.log(init_std_arr))
+        else:
+            if init_std_arr.shape != (self.action_dim,):
+                raise ValueError(
+                    f"init_std array shape {init_std_arr.shape} does not match "
+                    f"action_dim ({self.action_dim},)"
+                )
+            _log_std_const = jnp.log(init_std_arr)
+
+            def log_std_init_fn(key, shape, dtype=jnp.float32):
+                return _log_std_const.astype(dtype)
+        actor_logtstd = self.param("log_std", log_std_init_fn, (self.action_dim,))
         if not self.learnable_std:
             actor_logtstd = jax.lax.stop_gradient(actor_logtstd)
 
