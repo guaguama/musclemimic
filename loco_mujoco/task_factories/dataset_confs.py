@@ -93,6 +93,12 @@ class AMASSDatasetConf:
     Attributes:
         rel_dataset_path (Union[str, list]): A relative path or a list of relative paths to
             load from the AMASS dataset.
+        traj_path (Union[str, list]): An absolute path (or list of absolute paths) to a
+            pre-retargeted Trajectory `.npz` file (as saved via `Trajectory.save`). Loaded
+            directly via `Trajectory.load`, bypassing AMASS-root resolution and GMR/SMPL
+            retargeting. The file must already be in the target env's format. If set together
+            with `rel_dataset_path`/`dataset_group`, the directly-loaded trajectories are
+            concatenated with the retargeted ones.
         dataset_group (Union[str, list]): A predefined dataset group name, a list of group names,
             or a `GROUP_A + GROUP_B` combination string to load from AMASS.
         retargeting_method (str): The retargeting method to use (e.g., 'smpl', 'gmr'). Optional.
@@ -108,6 +114,7 @@ class AMASSDatasetConf:
 
     """
     rel_dataset_path: Union[str, list] = None
+    traj_path: Union[str, list] = None
     dataset_group: Union[str, list] = None
     retargeting_method: str = None
     gmr_config: dict = None
@@ -117,8 +124,10 @@ class AMASSDatasetConf:
     skip_body_data: bool = False
 
     def __post_init__(self):
-        assert self.rel_dataset_path is not None or self.dataset_group is not None, ("Either `rel_dataset_path` or "
-                                                                                     "`dataset_group` must be set.")
+        assert (self.traj_path is not None
+                or self.rel_dataset_path is not None
+                or self.dataset_group is not None), ("One of `traj_path`, `rel_dataset_path`, "
+                                                     "or `dataset_group` must be set.")
         if self.max_motions is not None:
             self.max_motions = int(self.max_motions)
             if self.max_motions <= 0:

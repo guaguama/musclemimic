@@ -1,4 +1,5 @@
 import dataclasses
+import os
 import random
 import numpy as np
 
@@ -247,9 +248,23 @@ class ImitationFactory(TaskFactory):
                     f"(max_motions={amass_dataset_conf.max_motions})."
                 )
 
+        # Collect absolute paths to pre-retargeted Trajectory .npz files. These are loaded
+        # directly and are never sampled by max_motions (which only caps `dataset_paths`).
+        traj_paths = []
+        if amass_dataset_conf.traj_path is not None:
+            traj_paths = (
+                list(amass_dataset_conf.traj_path)
+                if isinstance(amass_dataset_conf.traj_path, ListConfig | list)
+                else [amass_dataset_conf.traj_path]
+            )
+            for p in traj_paths:
+                if not os.path.exists(p):
+                    raise FileNotFoundError(f"[AMASS] traj_path does not exist: {p}")
+
         env_name = env.__class__.__name__
         if visualize_goal:
-            print(f"[Visualization] Building trajectories for env={env_name} with {len(dataset_paths)} paths.")
+            print(f"[Visualization] Building trajectories for env={env_name} with "
+                  f"{len(dataset_paths)} retargeted path(s) and {len(traj_paths)} direct file(s).")
 
         # Load trajectories from AMASS datasets
         # Extract retargeting configs
@@ -257,23 +272,41 @@ class ImitationFactory(TaskFactory):
         gmr_config = amass_dataset_conf.gmr_config
         clear_cache = amass_dataset_conf.clear_cache
 
-        if "MyoBimanualArm" in env_name:
-            method_name = retargeting_method.upper() if retargeting_method else 'SMPL'
-            print(f"[MuscleMimic] Detected MyoBimanualArm environment. "
-                  f"Using three-stage retargeting pipeline with {method_name} for Stage 1.")
-            traj = retarget_smpl_to_bimanual_via_intermediate(
-                dataset_paths,
-                retargeting_method=retargeting_method,
-                gmr_config=gmr_config,
-                clear_cache=clear_cache,
-            )
+        trajs = []
+
+        # Retargeting branch: only run when there are relative dataset names to retarget.
+        if dataset_paths:
+            if "MyoBimanualArm" in env_name:
+                method_name = retargeting_method.upper() if retargeting_method else 'SMPL'
+                print(f"[MuscleMimic] Detected MyoBimanualArm environment. "
+                      f"Using three-stage retargeting pipeline with {method_name} for Stage 1.")
+                trajs.append(retarget_smpl_to_bimanual_via_intermediate(
+                    dataset_paths,
+                    retargeting_method=retargeting_method,
+                    gmr_config=gmr_config,
+                    clear_cache=clear_cache,
+                ))
+            else:
+                trajs.append(load_retargeted_amass_trajectory(
+                    env_name, dataset_paths,
+                    retargeting_method=retargeting_method,
+                    gmr_config=gmr_config,
+                    clear_cache=clear_cache,
+                ))
+
+        # Direct branch: load pre-retargeted Trajectory files as-is (no retargeting).
+        # backend=np mirrors the retargeting loader; the JAX move happens in instantiate_env().
+        for p in traj_paths:
+            print(f"[AMASS] Loading pre-retargeted trajectory directly (no retargeting): {p}")
+            trajs.append(Trajectory.load(p, backend=np))
+
+        print(f"[AMASS] INFO: Built trajectory from {len(dataset_paths)} retargeted path(s) "
+              f"and {len(traj_paths)} direct file(s).")
+
+        if len(trajs) == 1:
+            traj = trajs[0]
         else:
-            traj = load_retargeted_amass_trajectory(
-                env_name, dataset_paths,
-                retargeting_method=retargeting_method,
-                gmr_config=gmr_config,
-                clear_cache=clear_cache,
-            )
+            traj = Trajectory.concatenate(trajs, backend=np)
 
         # Apply trajectory handler for interpolation and filtering
         default_th = TrajectoryHandler(env.model, control_dt=env.dt, traj=traj)

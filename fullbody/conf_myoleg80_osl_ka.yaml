@@ -43,6 +43,12 @@ experiment:
       amass_dataset_conf:
         # Pre-curated forward-walking subset (loco_mujoco/smpl/const.py).
         dataset_group: "KIT_KINESIS_TRAINING_MOTIONS_MINT_STRAIGHT_FORWARDS"
+        # Absolute path(s) to a pre-retargeted Trajectory .npz already in this env's format.
+        # Loaded directly (no GMR/SMPL retargeting). Accepts a string or a list. Combines with
+        # dataset_group/rel_dataset_path if those are also set, so to train on ONLY this file
+        # also set `dataset_group: null`. Overridable on the CLI as e.g.
+        #   experiment.task_factory.params.amass_dataset_conf.traj_path=/abs/path/to/file.npz
+        traj_path: null
         retargeting_method: gmr
         gmr_config:
           src_human: smplh
@@ -120,8 +126,8 @@ experiment:
       # Targets the OSL prosthetic motors (49.4x / 58.4x gear) so they stop driving
       # the model into the floor in early training. Other joints are unweighted.
       joint_torque_weights:
-        osl_knee_angle_r: 0 #1.0e-5
-        osl_ankle_angle_r: 0 #1.0e-5
+        osl_knee_angle_r: 1.0e-5
+        osl_ankle_angle_r: 1.0e-5
       use_mean_exp_reward: false
       sites_for_mimic:
         - pelvis_mimic
