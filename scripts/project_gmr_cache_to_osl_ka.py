@@ -1,10 +1,18 @@
 """Project MyoFullBody GMR-cached trajectories onto MyoLeg80_OSL_KA.
 
 For every MyoFullBody/gmr/<motion>.npz under the user's cache root, build an
-OSL_KA-compatible cache by name-mapping qpos/qvel into OSL_KA's joint vector
-and writing a minimal .npz to the OSL_KA cache directory. The trajectory
-loader's extend_motion() fills in FK-derived fields (xpos, site_xpos, ...)
-from qpos using OSL_KA's MjModel at first env load.
+OSL_KA-compatible cache and write it to the OSL_KA cache directory. Per motion:
+
+  - name-map qpos/qvel into OSL_KA's joint vector (see JOINT_RENAME); source
+    joints absent from the map (e.g. the upper body) are simply dropped,
+  - rebase the pelvis freejoint quaternion to account for the differing pelvis
+    frames of the two models (see PELVIS_QUAT_CORRECTION),
+  - precompute the FK-derived fields by running mj_forward per frame on OSL_KA's
+    MjModel: xpos, xquat, cvel, subtree_com (full body table) and site_xpos,
+    site_xmat (filtered to the mimic sites), plus static model metadata.
+
+The resulting .npz therefore carries the dense kinematics directly, so the
+trajectory loader does not need to call extend_motion() to populate them.
 
 Default behavior: project only the motions in
 KIT_KINESIS_TRAINING_MOTIONS_MINT_STRAIGHT_FORWARDS.
