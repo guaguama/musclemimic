@@ -265,6 +265,19 @@ class MyoLeg80OSLKASiteMapper(BaseSiteMapper):
         return "MyoLeg80_OSL_KA" in self.env_class_name
 
 
+class OSLFullBodySiteMapper(BaseSiteMapper):
+    """
+    Maps OSLFullBody model site IDs to trajectory site indices.
+
+    Same logic as MyoFullBodySiteMapper — required because the OSLFullBody env stores only
+    the 17 full-body mimic sites in trajectory data while the full model has hundreds of
+    sites. Without mapping, model site IDs collide with the small trajectory site array.
+    """
+
+    def _determine_mapping_requirement(self) -> bool:
+        return "OSLFullBody" in self.env_class_name
+
+
 class NoOpSiteMapper(BaseSiteMapper):
     """
     No-operation site mapper for environments that don't need site mapping.
@@ -295,6 +308,8 @@ def create_site_mapper(model: Union[MjModel, Model], env_class_name: str,
         return MyoFullBodySiteMapper(model, env_class_name, env_sites_for_mimic, trajectory_site_names)
     elif "MyoLeg80_OSL_KA" in env_class_name:
         return MyoLeg80OSLKASiteMapper(model, env_class_name, env_sites_for_mimic, trajectory_site_names)
+    elif "OSLFullBody" in env_class_name:
+        return OSLFullBodySiteMapper(model, env_class_name, env_sites_for_mimic, trajectory_site_names)
     else:
         return NoOpSiteMapper(model, env_class_name, env_sites_for_mimic, trajectory_site_names)
 
