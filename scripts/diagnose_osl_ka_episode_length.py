@@ -1116,7 +1116,7 @@ def _run_mjx_rollout(
             low_noise_std,
             batch=num_envs,
         )
-        obs, _reward, _absorbing, done, info, env_state, transition_state = step_fn(
+        obs, _reward, _absorbing, done, info, env_state, transition_state, _transition_obs = step_fn(
             env_state, jnp.asarray(action)
         )
         del obs

@@ -321,6 +321,7 @@ experiment:
     video_frequency: 1
     amass_dataset_conf:
       dataset_group: null
+      trajectory_cache_type: "sparse"
       traj_path:
         - /home/dmma/src/00_AMBER/00_projbackflip/clipper/outputs/musclemimic/osl_fullbody/WalkingStraightForwards03_poses_crop0-521_ankle-7.npz
     terminal_state_type: MeanRelativeSiteDeviationTerminalStateHandler
