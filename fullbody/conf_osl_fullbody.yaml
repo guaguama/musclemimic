@@ -106,7 +106,7 @@ experiment:
     # -------------------------------------------------------------------------
     reward_type: MimicReward
     reward_params:
-      qpos_w_sum: 0.1
+      qpos_w_sum: 0.2 # 0.1
       qvel_w_sum: 0.1
       root_pos_w_sum: 0.1
       root_vel_w_sum: 0.1
@@ -119,8 +119,8 @@ experiment:
       # Targets the OSL prosthetic motors (49.4x / 58.4x gear) so they stop driving
       # the model into the floor in early training. Other joints are unweighted.
       joint_torque_weights:
-        osl_knee_angle_r: 1.5e-5
-        osl_ankle_angle_r: 1.5e-5
+        osl_knee_angle_r: 1e-5
+        osl_ankle_angle_r: 1e-5
       use_mean_exp_reward: false
       sites_for_mimic:
         - pelvis_mimic
@@ -152,6 +152,14 @@ experiment:
       root_orientation_threshold: 1.0     # radians
       enable_site_check: true
 
+    # -------------------------------------------------------------------------
+    # Random Start Disabling
+    # -------------------------------------------------------------------------
+    th_params:
+      random_start: false
+      fixed_start_conf: [0, 0]
+      start_from_random_step: false
+
   # ===========================================================================
   # Algorithm
   # ===========================================================================
@@ -169,7 +177,7 @@ experiment:
   # ---------------------------------------------------------------------------
   lr: 4e-4
   num_envs: ${experiment.env_params.num_envs}
-  total_timesteps: 2048000000
+  total_timesteps: 1000000000 #2048000000
   max_grad_norm: 1.0
   anneal_lr: true
   lr_schedule_type: "linear"
@@ -305,7 +313,7 @@ experiment:
   # ===========================================================================
   validation:
     active: true
-    deterministic: false
+    deterministic: true
     num_steps: 500
     num_envs: 100
     num: 100
@@ -345,6 +353,14 @@ experiment:
       - right_knee_mimic
       - right_ankle_mimic
       - right_toes_mimic
+  
+    # -------------------------------------------------------------------------
+    # Control
+    # -------------------------------------------------------------------------
+    th_params:
+      random_start: false
+      fixed_start_conf: [0, 0]
+      start_from_random_step: false
 
 # =============================================================================
 # Control configuration (referenced by experiment.env_params.control_*)
