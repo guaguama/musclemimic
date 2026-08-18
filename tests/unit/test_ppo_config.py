@@ -92,6 +92,7 @@ class TestGetPpoConfig:
             "learnable_std": True,
             "ent_coef": 0.01,
             "vf_coef": 0.5,
+            "init_std_motors":1.0,
         }
 
         config = OmegaConf.create({
