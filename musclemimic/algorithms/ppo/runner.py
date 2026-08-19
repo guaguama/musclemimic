@@ -85,6 +85,16 @@ if TYPE_CHECKING:
     from musclemimic.utils.metrics import MetricsHandler
 
 
+# Per-step CLF diagnostics emitted by CLFReward into reward_info. Absent under MimicReward,
+# so every use is guarded by a static `"clf_V" in traj_batch.info` check.
+_CLF_INFO_KEYS = (
+    "clf_V", "clf_V_norm", "clf_vdot", "clf_cross", "clf_violation", "reward_clf", "penalty_clf",
+    # per-group contributions to V; these sum to clf_V and reveal which group's `scale` is the
+    # effective tuning knob.
+    "clf_V_rpos", "clf_V_rangles", "clf_V_root_pos", "clf_V_root_ori", "clf_V_qpos_joint",
+)
+
+
 def train(
     rng: jax.Array,
     env: Any,
@@ -552,6 +562,19 @@ def train(
                 "value_mean": value_mean, "explained_var": explained_var,
             }
 
+            # CLF diagnostics. `info` carries every reward_info key through the scan, but
+            # _compute_training_metrics/SummaryMetrics have a fixed schema, so these are routed
+            # via ppo_m instead (same path as adv_mean/explained_var). The membership test is
+            # Python-level, hence static under trace.
+            if "clf_V" in traj_batch.info:
+                for _clf_key in _CLF_INFO_KEYS:
+                    ppo_m[_clf_key] = jnp.mean(traj_batch.info[_clf_key])
+                # Fraction of the batch where the pre-clip total went negative, i.e. where
+                # max(reward, 0) is eating the CLF penalty's gradient.
+                ppo_m["clf_frac_clipped"] = jnp.mean(
+                    (traj_batch.info["reward_preclip"] < 0.0).astype(jnp.float32)
+                )
+
             # Get enabled_measures from config for validation metric filtering
             val_cfg = config.get("validation", {})
             enabled_measures = val_cfg.get("measures", None)
@@ -625,6 +648,17 @@ def train(
                     if reward_curriculum_enabled:
                         log["reward_curriculum/qvel_w_sum"] = float(rc_qvel)
                         log["reward_curriculum/root_vel_w_sum"] = float(rc_root)
+                    if "clf_V" in m:
+                        log["clf/V"] = float(m["clf_V"])
+                        log["clf/V_norm"] = float(m["clf_V_norm"])
+                        log["clf/vdot"] = float(m["clf_vdot"])
+                        log["clf/cross"] = float(m["clf_cross"])
+                        log["clf/violation"] = float(m["clf_violation"])
+                        log["clf/reward"] = float(m["reward_clf"])
+                        log["clf/penalty"] = float(m["penalty_clf"])
+                        log["clf/frac_clipped"] = float(m["clf_frac_clipped"])
+                        for _g in ("rpos", "rangles", "root_pos", "root_ori", "qpos_joint"):
+                            log[f"clf/V_{_g}"] = float(m[f"clf_V_{_g}"])
                     if bool(config.get("use_moe", False)):
                         log["ppo/moe_loss"] = float(m["moe_loss"])
                         log["ppo/moe_gate_entropy"] = float(m["gate_entropy"])

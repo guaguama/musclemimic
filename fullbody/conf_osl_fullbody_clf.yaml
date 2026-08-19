@@ -1,0 +1,86 @@
+# CLF-based reward variant of conf_osl_fullbody.
+#
+# Inherits everything from conf_osl_fullbody and replaces the DeepMimic exponential tracking
+# terms with a control-Lyapunov-function reward. This is a separately-tuned config on purpose:
+# switching reward_type alone would NOT drop the tracking terms, because the parent config sets
+# all seven tracking weights explicitly (and MimicReward's own class defaults are non-zero:
+# rpos_w_sum=0.5, rquat_w_sum=0.3, root_vel_w_sum=0.2).
+#
+# Usage:
+#   uv run fullbody/experiment.py --config-name=conf_osl_fullbody_clf
+#
+# Null A/B run (must reproduce the conf_osl_fullbody baseline within noise):
+#   ... --config-name=conf_osl_fullbody_clf \
+#       experiment.env_params.reward_params.clf_w=0.0 \
+#       experiment.env_params.reward_params.clf_pen_w=0.0 \
+#       experiment.env_params.reward_params.qpos_w_sum=0.2 \
+#       experiment.env_params.reward_params.qvel_w_sum=0.1 \
+#       experiment.env_params.reward_params.root_pos_w_sum=0.1 \
+#       experiment.env_params.reward_params.root_vel_w_sum=0.1 \
+#       experiment.env_params.reward_params.rpos_w_sum=0.6 \
+#       experiment.env_params.reward_params.rquat_w_sum=0.01 \
+#       experiment.env_params.reward_params.rvel_w_sum=0.1
+defaults:
+  - conf_osl_fullbody
+  - _self_
+
+wandb:
+  tags: ["fullbody", "osl_fullbody", "forward_walking", "clf"]
+
+experiment:
+  env_params:
+    reward_type: CLFReward
+    reward_params:
+      # ---------------------------------------------------------------------------
+      # Exponential tracking terms OFF: the CLF term is the tracking reward, matching
+      # the reference implementation (its reward set has no parallel tracking term).
+      # qvel_w_sum / root_vel_w_sum MUST be listed explicitly -- an absent key falls back
+      # to 0.2, not 0.0 (musclemimic/algorithms/ppo/runner.py, reward-curriculum init).
+      # ---------------------------------------------------------------------------
+      qpos_w_sum: 0.0
+      qvel_w_sum: 0.0
+      root_pos_w_sum: 0.0
+      root_vel_w_sum: 0.0
+      rpos_w_sum: 0.0
+      rquat_w_sum: 0.0
+      rvel_w_sum: 0.0
+
+      # ---------------------------------------------------------------------------
+      # CLF terms. clf_w and clf_pen_w are independent; both zero reduces this reward to
+      # MimicReward exactly. Never run clf_pen_w without clf_w: the decrease condition is
+      # relative, so on its own it mildly rewards sitting at large V.
+      # ---------------------------------------------------------------------------
+      clf_w: 1.0                 # weight of exp(-V / V_max)
+      clf_pen_w: 0.25            # weight of the (Vdot + alpha*V)+ violation
+      clf_tau: 0.10              # shared time scale (s); implies a 0.5 m/s velocity scale at scale=0.05
+      clf_q_pos: 1.0             # CARE weights -> p11=1.2777 p12=0.3162 p22=0.4040, cond(P)=4.6
+      clf_q_vel: 1.0
+      clf_r: 0.1
+      clf_alpha: null            # null => 0.5 * exact achievable decay rate (~0.642). Note the
+                                 # conservative bound lambda_min(Q_cl)/lambda_max(P) understates
+                                 # that rate by 1.03x-48x, so it is not used.
+      clf_alpha_safety: 0.5
+      clf_c_viol: 0.10           # violation saturates at ~10%-per-step growth of V
+      clf_eps_dead: 0.01         # deadband, as a fraction of V_max
+
+      # Per-channel scales. V scales as 1/scale^2, so the level term is QUADRATICALLY
+      # sensitive to these -- calibrate `rpos.scale` from the median err/rpos of a converged
+      # MimicReward run rather than guessing. Do NOT derive it from the termination threshold
+      # (1.0 m mean site deviation ~= 0.577 m per component), which would pin exp(-V/V_max)
+      # near 1.0 across every reachable state and kill the gradient.
+      clf_groups:
+        rpos:       {enabled: true,  scale: 0.05}   # metres  -- exact (e, edot) pairing
+        rangles:    {enabled: true,  scale: 0.20}   # radians -- J(theta) small-angle approx
+        root_pos:   {enabled: true,  scale: 0.10}   # metres  -- exact
+        root_ori:   {enabled: true,  scale: 0.20}   # radians -- J(theta) small-angle approx
+        # Enable this first if joint-space drift appears now that qpos_w_sum is 0. The
+        # reference's own eta includes waist/shoulder/elbow joints.
+        qpos_joint: {enabled: false, scale: 0.10}
+
+  # REQUIRED invariant: with the curriculum enabled, qvel_w_sum / root_vel_w_sum are taken from
+  # qvel_w_sum_init / root_vel_w_sum_init and reward_params is ignored entirely, silently
+  # re-enabling the velocity tracking terms this config just switched off.
+  reward_curriculum:
+    enabled: false
+    qvel_w_sum_init: 0.0
+    root_vel_w_sum_init: 0.0

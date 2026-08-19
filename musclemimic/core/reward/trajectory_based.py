@@ -161,6 +161,12 @@ class MimicReward(TrajectoryBasedReward):
 
     """
 
+    # Subclasses set this True to enable the ``_extra_reward_terms`` hook. This is a
+    # Python-level constant, so ``if self._HAS_EXTRA_TERMS:`` is resolved at trace time:
+    # plain MimicReward pays no jit cost and never builds the site context (which is
+    # undefined for single-site models).
+    _HAS_EXTRA_TERMS = False
+
     def __init__(self, env: Any,
                  sites_for_mimic=None,
                  joints_for_mimic=None,
@@ -290,6 +296,40 @@ class MimicReward(TrajectoryBasedReward):
             except Exception:
                 pass
 
+    def _extra_reward_terms(self, ctx: Dict[str, Any], env: Any,
+                            model: Union[MjModel, Model],
+                            data: Union[MjData, Data],
+                            carry: Any,
+                            backend: ModuleType):
+        """
+        Hook for subclasses to add reward terms built from the mimic error signals that
+        ``__call__`` has already computed. Called only when ``_HAS_EXTRA_TERMS`` is True.
+
+        Args:
+            ctx (Dict): Already-computed quantities. Keys: ``qpos``, ``qpos_traj``, ``qvel``,
+                ``qvel_traj``, ``traj_data``, ``xy_offset``, ``action``, and -- when the env
+                has more than one mimic site -- ``site_rpos``, ``site_rpos_traj``,
+                ``site_rangles``, ``site_rangles_traj`` (None otherwise).
+                ``site_rvel`` is deliberately NOT exposed: it is not the time derivative of
+                ``site_rpos`` (see ``calculate_relative_velocity_in_local_frame``, which
+                negates and rotates), so pairing the two would silently invert the sign of any
+                position/velocity cross term. Derive velocities from
+                ``calc_site_velocities(..., flg_local=False)`` instead.
+            env (Any): The environment instance.
+            model (Union[MjModel, Model]): The simulation model.
+            data (Union[MjData, Data]): The simulation data.
+            carry (Any): Additional carry.
+            backend (ModuleType): numpy or jax.numpy.
+
+        Returns:
+            Tuple[float, float, Dict, Dict]: ``(extra_reward, extra_penalty, extra_info,
+            extra_state)``. ``extra_reward`` is added to the weighted tracking sum;
+            ``extra_penalty`` is added after the existing penalty floor and before the
+            non-negativity clip; ``extra_info`` is merged into ``reward_info``;
+            ``extra_state`` is merged into the reward-state field updates (and may override a
+            base field such as ``imitation_error_total``).
+        """
+        return 0.0, 0.0, {}, {}
 
     def init_state(self, env: Any,
                    key: Any,
@@ -556,6 +596,29 @@ class MimicReward(TrajectoryBasedReward):
             root_vel_dist = backend.mean(backend.square(vel_local - traj_vel_local))
             root_vel_reward = backend.exp(-self._root_vel_w_exp * root_vel_dist)
 
+        # Subclass hook: extra reward terms from the already-computed error signals.
+        # Statically guarded, so plain MimicReward does not even build ``ctx``.
+        if self._HAS_EXTRA_TERMS:
+            _has_sites = len(self._rel_site_ids) > 1
+            ctx = {
+                "qpos": qpos,
+                "qpos_traj": qpos_traj,
+                "qvel": qvel,
+                "qvel_traj": qvel_traj,
+                "traj_data": traj_data_single,
+                "xy_offset": xy_offset,
+                "action": action,
+                "site_rpos": site_rpos if _has_sites else None,
+                "site_rpos_traj": site_rpos_traj if _has_sites else None,
+                "site_rangles": site_rangles if _has_sites else None,
+                "site_rangles_traj": site_rangles_traj if _has_sites else None,
+            }
+            extra_reward, extra_penalty, extra_info, extra_state = self._extra_reward_terms(
+                ctx, env, model, data, carry, backend
+            )
+        else:
+            extra_reward, extra_penalty, extra_info, extra_state = 0.0, 0.0, {}, {}
+
         # calculate costs
         # out of bounds action cost
         if self._action_out_of_bounds_coeff > 0.0:
@@ -611,6 +674,9 @@ class MimicReward(TrajectoryBasedReward):
                             + self._action_rate_coeff * action_rate_penalty
                             + self._activation_energy_coeff * activation_energy_penalty)
         total_penalities = backend.maximum(total_penalities, -1.0)
+        # Hook penalty sits OUTSIDE the -1.0 floor so an unrelated saturating penalty cannot
+        # starve its gradient, and before the non-negativity clip below.
+        total_penalities = total_penalities + extra_penalty
 
         # calculate total reward
         total_reward = (self._qpos_w_sum * qpos_reward + qvel_w_sum * qvel_reward
@@ -621,7 +687,12 @@ class MimicReward(TrajectoryBasedReward):
                         + self._rpos_w_sum * rpos_reward + self._rquat_w_sum * rangles_reward
                         + self._rvel_w_sum * rvel_rot_reward + self._rvel_w_sum * rvel_lin_reward)
 
+        total_reward = total_reward + extra_reward
         total_reward = total_reward + total_penalities
+
+        # Pre-clip total, exported for diagnostics: the clip below is otherwise invisible, so a
+        # reward pinned at 0 (no gradient anywhere) looks identical to a genuinely zero reward.
+        reward_preclip = total_reward
 
         # clip to positive values
         total_reward = backend.maximum(total_reward, 0.0)
@@ -629,12 +700,15 @@ class MimicReward(TrajectoryBasedReward):
         # set nan values to 0
         total_reward = backend.nan_to_num(total_reward, nan=0.0)
 
-        # update reward state
-        reward_state = reward_state.replace(
-            last_qvel=data.qvel,
-            last_action=action,
-            imitation_error_total=imitation_error_total,
-        )
+        # update reward state. Built as one dict so a subclass hook can override a base
+        # field (replace(..., **extra_state) would raise on a duplicate keyword).
+        state_updates = {
+            "last_qvel": data.qvel,
+            "last_action": action,
+            "imitation_error_total": imitation_error_total,
+        }
+        state_updates.update(extra_state)
+        reward_state = reward_state.replace(**state_updates)
         carry = carry.replace(reward_state=reward_state)
 
         # Diagnostic error metrics (raw errors, not exp-transformed)
@@ -673,6 +747,7 @@ class MimicReward(TrajectoryBasedReward):
         # Build reward_info for logging/diagnostics
         reward_info = {
             "reward_total": total_reward,
+            "reward_preclip": reward_preclip,
             "reward_qpos": qpos_reward,
             "reward_qvel": qvel_reward,
             "reward_root_pos": root_pos_reward,
@@ -691,6 +766,8 @@ class MimicReward(TrajectoryBasedReward):
             reward_info["reward_rquat"] = rangles_reward
             reward_info["reward_rvel_rot"] = rvel_rot_reward
             reward_info["reward_rvel_lin"] = rvel_lin_reward
+
+        reward_info.update(extra_info)
 
         return total_reward, carry, reward_info
 
