@@ -6,6 +6,7 @@ Example usage:
 """
 
 import argparse
+from pathlib import Path
 
 from loco_mujoco.task_factories import AMASSDatasetConf, CustomDatasetConf, ImitationFactory
 from musclemimic.utils import detect_headless_environment, setup_headless_rendering
@@ -43,6 +44,16 @@ def parse_arguments():
         type=str,
         default=None,
         help="Dataset group from loco_mujoco.smpl.const",
+    )
+    parser.add_argument(
+        "--traj-path",
+        action="append",
+        default=None,
+        help=(
+            "Absolute path to a pre-retargeted env-format Trajectory .npz (as saved by "
+            "Trajectory.save). Loaded directly, bypassing SMPL/GMR retargeting. Can be "
+            "passed multiple times."
+        ),
     )
     parser.add_argument(
         "--c3d-file",
@@ -197,9 +208,10 @@ def main():
 
     # Build dataset configuration
     motions = args.motion if args.motion is not None else []
-    modes = [bool(motions), bool(args.dataset_group), bool(args.c3d_file)]
+    traj_paths = args.traj_path if args.traj_path is not None else []
+    modes = [bool(motions), bool(args.dataset_group), bool(args.c3d_file), bool(traj_paths)]
     if sum(modes) != 1:
-        raise SystemExit("Pass exactly one of --motion, --dataset-group, or --c3d-file.")
+        raise SystemExit("Pass exactly one of --motion, --dataset-group, --c3d-file, or --traj-path.")
 
     retargeting_method = args.retargeting_method or ("gmr" if args.c3d_file else "smpl")
     args.retargeting_method = retargeting_method
@@ -213,6 +225,8 @@ def main():
     else:
         if motions:
             dataset_conf = AMASSDatasetConf(motions)
+        elif traj_paths:
+            dataset_conf = AMASSDatasetConf(traj_path=traj_paths)
         else:
             dataset_conf = AMASSDatasetConf(dataset_group=args.dataset_group)
 
@@ -235,6 +249,10 @@ def main():
             print("Motions:")
             for m in motions:
                 print(f"  - {m}")
+        if traj_paths:
+            print("Pre-retargeted trajectories (loaded directly):")
+            for tp in traj_paths:
+                print(f"  - {tp}")
         if retargeting_method == "gmr":
             print(f"  GMR Solver: {args.gmr_solver}, FPS: {args.gmr_target_fps}")
 
@@ -298,6 +316,10 @@ def main():
     video_name = args.video_name
     if motions and video_name == "retargeted":
         video_name = get_video_name_from_motion(motions[0]) if len(motions) == 1 else f"{len(motions)}_motions"
+    elif traj_paths and video_name == "retargeted":
+        video_name = (
+            Path(traj_paths[0]).stem if len(traj_paths) == 1 else f"{len(traj_paths)}_trajectories"
+        )
 
     # Record or play trajectory
     recorder_params = None

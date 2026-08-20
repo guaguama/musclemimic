@@ -1,0 +1,22 @@
+# Position-controlled OSL full-body robot variant.  Inherit the complete OSL
+# trajectory, goal, reward, termination, Warp, validation, and PPO schedule and
+# override only settings that differ for the 29 stateless robot actuators.
+defaults:
+  - conf_osl_fullbody
+  - _self_
+
+wandb:
+  tags: ["fullbody", "osl_fullbody_robot", "position_control", "forward_walking"]
+
+experiment:
+  env_params:
+    env_name: MjxOSLFullBodyRobot
+    enable_muscle_length_observations: false
+    enable_muscle_velocity_observations: false
+    enable_muscle_force_observations: false
+    enable_muscle_excitation_observations: false
+    enable_muscle_activation_observations: false
+
+  ppo_config:
+    init_std: 0.2
+    init_std_motors: 0.2

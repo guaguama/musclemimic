@@ -65,14 +65,16 @@ experiment:
     enable_muscle_activation_observations: true
     enable_touch_sensor_observations: true
 
-    init_state_type: PerturbedTrajInitialStateHandler
-    init_state_params:
-      qpos_noise_std: 0.01          # rad; scalar, or a length-nq (84) list
-      qvel_noise_std: 0.05          # rad/s; scalar, or a length-nv (83) list
-      perturb_free_joint_pos: false
-      perturb_free_joint_quat: false
-      perturb_free_joint_vel: false
-      perturb_ball_joints: false
+    # init_state_type: PerturbedTrajInitialStateHandler
+    # init_state_params:
+    #   qpos_noise_std: 0.01          # rad; scalar, or a length-nq (84) list
+    #   qvel_noise_std: 0.05          # rad/s; scalar, or a length-nv (83) list
+    #   perturb_free_joint_pos: false
+    #   perturb_free_joint_quat: false
+    #   perturb_free_joint_vel: false
+    #   perturb_ball_joints: false
+
+    init_state_type: TrajInitialStateHandler
 
     # -------------------------------------------------------------------------
     # Goal — what the policy is conditioned on (full 17-site full-body set)
@@ -322,7 +324,7 @@ experiment:
   validation:
     active: true
     deterministic: true
-    num_steps: 500
+    num_steps: 522
     num_envs: 100
     num: 100
     video_length: 3000
