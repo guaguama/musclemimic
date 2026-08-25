@@ -324,7 +324,7 @@ experiment:
   validation:
     active: true
     deterministic: true
-    num_steps: 522
+    num_steps: 522 # Must set to at least length of trajectory otherwise curves will zero
     num_envs: 100
     num: 100
     video_length: 3000

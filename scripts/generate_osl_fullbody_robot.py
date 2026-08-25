@@ -5,6 +5,57 @@ The source model is intentionally left untouched.  This script applies the same
 fingerless topology used by :class:`MyoFullBody`, removes muscle actuation and
 its tendons, and installs normalized absolute position servos followed by the
 two original OSL torque motors.
+
+Position-control mapping
+------------------------
+Each servo maps ``ctrl`` in ``[-1, 1]`` onto the joint's full range::
+
+    q_target = midpoint + half_range * ctrl
+    force    = Kp * (q_target - q) - Kd * qdot
+
+encoded as ``gainprm[0] = Kp * half_range`` and
+``biasprm[:3] = (Kp * midpoint, -Kp, -Kd)``, so ``-1`` and ``+1`` land exactly on
+the lower and upper joint limits.  This is the same convention the SMPL humanoid
+reference uses across all 69 of its actuators.
+
+How POSITION_SERVOS was derived
+-------------------------------
+Three rules, all motion-independent -- no trajectory clip enters any parameter.
+``scripts/analyze_osl_fullbody_robot_actuators.py`` reproduces the table and
+exposes the three knobs (``--saturation-error``, ``--max-bandwidth``,
+``--damping-ratio``); rerun it rather than editing numbers by hand.
+
+1. ``forcerange`` is the peak moment the sibling muscle model
+   (``osl_fullbody.xml``) can produce about that coordinate.  Muscle force is
+   ``gain(length, velocity) * act``, linear in activation with no coupling
+   between muscles, so the maximum is a linear program whose optimum is "every
+   agonist at ``act=1``, every antagonist at 0" -- evaluated by summing positive
+   and negative moment contributions separately, not as a co-contracted net.
+   Moments are accumulated in the independent coordinate system, adding each
+   equality follower's moment times ``dq_follower/dq_driver``; 19 of these 27
+   joints drive no followers, but the torso gains 1.65-1.9x and ``elv_angle``
+   inverts.  Capacity is the peak over each joint's own range at two reference
+   poses, qpos0 and all-midrange -- qpos0 alone leaves ``elv_angle`` at exactly
+   0 N*m, since the elevation plane is degenerate with the arm at the side.
+
+2. ``Kp = min(forcerange / 0.35 rad, I_eff * 150**2)`` -- the servo saturates at
+   20 degrees of tracking error, capped at a 150 rad/s natural frequency.
+
+3. ``Kd = 2 * zeta * sqrt(Kp * I_eff)`` with ``zeta = 1``, where ``I_eff`` is the
+   equality-constrained effective inertia at the reconciled qpos0.
+
+Rule 3 is what keeps explicit Euler viable.  ``Kd / I = 2 * zeta * omega``, so the
+stability condition ``Kd * dt / I < 2`` reduces to ``zeta * omega * dt < 1``,
+satisfied at any sane bandwidth.  The flat per-region values this table replaced
+had no such guarantee and reached 3.0-3.6 at 1 ms and 3.3-6.8 at the 2 ms the
+training env uses -- the sole cause of distal-joint blowups previously mistaken
+for torque saturation.  ``mjDSBL_EULERDAMP`` (left enabled by the OSL
+environments) makes ``dof_damping`` implicit but does *not* cover an actuator's
+``biasprm[2]``, which is why the socket joints tolerate ``damping=10000`` while a
+servo ``Kd`` of 30 diverges.
+
+OSL_MOTORS is deliberately untouched: the prosthesis keeps its original gear
+ratios and +/-2.88 control range.
 """
 
 from __future__ import annotations
@@ -69,40 +120,46 @@ FINGER_JOINTS = (
     "pm5_flexion_l",
 )
 
-# (joint name, Kp, Kd, absolute actuator force limit)
+# (joint name, Kp, Kd, absolute actuator force limit).  Values are verbatim output of
+# scripts/analyze_osl_fullbody_robot_actuators.py -- see this module's docstring for the
+# three rules that produce them.  Regenerate rather than hand-editing: gainprm encodes
+# Kp * half_range, so editing a Kp in the XML alone silently rescales that joint's
+# normalized action semantics.
 POSITION_SERVOS = (
     # Torso.
-    ("flex_extension", 200.0, 20.0, 300.0),
-    ("lat_bending", 200.0, 20.0, 300.0),
-    ("axial_rotation", 200.0, 20.0, 300.0),
+    ("flex_extension",       871.4,  68.54,  305.0),
+    ("lat_bending",         1228.6,  90.33,  430.0),
+    ("axial_rotation",       771.4,  30.26,  270.0),
     # Right arm.
-    ("elv_angle_r", 100.0, 10.0, 200.0),
-    ("shoulder_elv_r", 100.0, 10.0, 200.0),
-    ("shoulder_rot_r", 100.0, 10.0, 200.0),
-    ("elbow_flex_r", 100.0, 10.0, 200.0),
-    ("pro_sup_r", 100.0, 10.0, 200.0),
-    ("deviation_r", 100.0, 10.0, 200.0),
-    ("flexion_r", 100.0, 10.0, 200.0),
-    # Left arm.
-    ("elv_angle_l", 100.0, 10.0, 200.0),
-    ("shoulder_elv_l", 100.0, 10.0, 200.0),
-    ("shoulder_rot_l", 100.0, 10.0, 200.0),
-    ("elbow_flex_l", 100.0, 10.0, 200.0),
-    ("pro_sup_l", 100.0, 10.0, 200.0),
-    ("deviation_l", 100.0, 10.0, 200.0),
-    ("flexion_l", 100.0, 10.0, 200.0),
-    # Residual right hip.
-    ("hip_flexion_r", 300.0, 30.0, 500.0),
-    ("hip_adduction_r", 300.0, 30.0, 500.0),
-    ("hip_rotation_r", 300.0, 30.0, 500.0),
+    ("elv_angle_r",          442.9,  38.73,  155.0),           # 0 N*m at qpos0 alone (gimbal singularity)
+    ("shoulder_elv_r",       314.3,  65.13,  110.0),
+    ("shoulder_rot_r",       257.1,   4.69,   90.0),
+    ("elbow_flex_r",         242.9,   7.07,   85.0),
+    ("pro_sup_r",             42.9,   0.78,   15.0),
+    ("deviation_r",           68.6,   0.91,   35.0),
+    ("flexion_r",             82.1,   1.09,   40.0),
+    # Left arm -- identical to the right: both sizing poses are bilaterally
+    # symmetric, so every pair falls out equal with no manual symmetrization.
+    ("elv_angle_l",          442.9,  38.73,  155.0),           # 0 N*m at qpos0 alone (gimbal singularity)
+    ("shoulder_elv_l",       314.3,  65.13,  110.0),
+    ("shoulder_rot_l",       257.1,   4.69,   90.0),
+    ("elbow_flex_l",         242.9,   7.07,   85.0),
+    ("pro_sup_l",             42.9,   0.78,   15.0),
+    ("deviation_l",           68.6,   0.91,   35.0),
+    ("flexion_l",             82.1,   1.09,   40.0),
+    # Residual right hip.  Genuinely weaker than the left -- the amputation removes
+    # muscles crossing this hip -- so do NOT symmetrize these with the left leg.
+    ("hip_flexion_r",        814.3,  22.78,  285.0),
+    ("hip_adduction_r",      671.4,  23.23,  235.0),
+    ("hip_rotation_r",       457.1,  10.62,  160.0),
     # Intact left leg.
-    ("hip_flexion_l", 300.0, 30.0, 500.0),
-    ("hip_adduction_l", 300.0, 30.0, 500.0),
-    ("hip_rotation_l", 300.0, 30.0, 500.0),
-    ("knee_angle_l", 300.0, 30.0, 500.0),
-    ("ankle_angle_l", 300.0, 30.0, 500.0),
-    ("subtalar_angle_l", 300.0, 30.0, 500.0),
-    ("mtp_angle_l", 300.0, 30.0, 500.0),
+    ("hip_flexion_l",       1600.0,  34.16,  560.0),
+    ("hip_adduction_l",     1200.0,  39.63,  420.0),
+    ("hip_rotation_l",       528.6,   9.23,  185.0),
+    ("knee_angle_l",        1557.1,  26.99,  545.0),
+    ("ankle_angle_l",        343.8,   4.58,  425.0),           # Kp bandwidth-capped at wn=150
+    ("subtalar_angle_l",     304.6,   4.06,  135.0),
+    ("mtp_angle_l",           14.3,   0.76,    5.0),           # MyoLeg's toe flexors are weak; below human MVC
 )
 
 OSL_MOTORS = (

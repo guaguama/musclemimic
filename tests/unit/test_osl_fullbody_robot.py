@@ -141,13 +141,16 @@ def test_actuator_order_standard_servo_parameters_and_passive_coordinates(robot_
         np.testing.assert_allclose(
             model.actuator_forcerange[actuator_id], (-force_limit, force_limit)
         )
+        # MuJoCo serializes to six significant figures, so a derived product such as
+        # subtalar's Kp * half_range (106.325504 -> "106.326") carries up to ~5e-6
+        # relative error.  That text format, not the arithmetic, sets the floor here.
         np.testing.assert_allclose(
-            model.actuator_gainprm[actuator_id, 0], kp * half_range, rtol=3e-6, atol=1e-6
+            model.actuator_gainprm[actuator_id, 0], kp * half_range, rtol=1e-5, atol=1e-6
         )
         np.testing.assert_allclose(
             model.actuator_biasprm[actuator_id, :3],
             (kp * midpoint, -kp, -kd),
-            rtol=5e-6,
+            rtol=1e-5,
             atol=1e-6,
         )
 

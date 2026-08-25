@@ -1,0 +1,197 @@
+{
+  "created_unix_time": 1787272500.3438451,
+  "dependencies": {
+    "flax": "0.12.0",
+    "jax": "0.7.2",
+    "jaxlib": "0.7.2",
+    "mujoco": "3.4.0",
+    "mujoco-mjx": "3.4.0",
+    "numpy": "2.2.6",
+    "optax": "0.2.8",
+    "warp-lang": "1.10.0"
+  },
+  "elapsed_wall_seconds": 264.7505805492401,
+  "fullbody_slowdown_ratio_vs_myoleg80_at_2048": null,
+  "git": {
+    "dirty": true,
+    "revision": "afbf5a29bb5ac4498446b25f3720fa2e8eea1d41"
+  },
+  "hardware": {
+    "gpu_index": 0,
+    "gpu_memory_total_bytes": 25757220864,
+    "gpu_memory_total_mib": 24564,
+    "gpu_name": "NVIDIA GeForce RTX 4090",
+    "nvidia_driver": "595.84"
+  },
+  "median_throughput_by_case": [
+    {
+      "attempts": 2,
+      "env_count": 2048,
+      "failures": [],
+      "feasible": true,
+      "median_execution_seconds": 93.49075466300019,
+      "median_jit_compile_seconds": 30.33169314750012,
+      "median_setup_seconds": 7.426331496500097,
+      "median_timesteps_per_second": 10515.81605623001,
+      "model": "fullbody",
+      "peak_allocated_vram_bytes": 5476739584,
+      "peak_device_used_vram_bytes": 25034752000,
+      "successful_repeats": 2
+    }
+  ],
+  "plan": {
+    "cases": [
+      {
+        "config_name": "conf_osl_fullbody",
+        "env_count": 2048,
+        "model": "fullbody",
+        "trajectory": "/home/dmma/src/00_AMBER/00_projbackflip/clipper/outputs/musclemimic/osl_fullbody/WalkingStraightForwards03_poses_crop0-521_ankle-7.npz"
+      }
+    ],
+    "jax_preallocate": true,
+    "num_steps": 80,
+    "repeats": 2,
+    "timesteps_per_run": 983040,
+    "worker_processes": 2
+  },
+  "preflight": {
+    "errors": [],
+    "hardware": {
+      "gpu_index": 0,
+      "gpu_memory_total_bytes": 25757220864,
+      "gpu_memory_total_mib": 24564,
+      "gpu_name": "NVIDIA GeForce RTX 4090",
+      "nvidia_driver": "595.84"
+    },
+    "ok": true,
+    "warnings": []
+  },
+  "recommendation_rule": "smallest feasible count within 3% of best throughput and below 90% actual peak device VRAM",
+  "recommended_fullbody_env_count": null,
+  "runs": [
+    {
+      "config_name": "conf_osl_fullbody",
+      "env_count": 2048,
+      "execution_seconds": 92.58843426099975,
+      "gpu_utilization_max_percent": 100.0,
+      "gpu_utilization_mean_percent": 99.68867924528301,
+      "jax_preallocate": true,
+      "jit_compile_seconds": 30.25401601900012,
+      "model": "fullbody",
+      "model_dimensions": {
+        "action_dim": 330,
+        "actor_hidden_layers": [
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          2048,
+          2048,
+          2048,
+          1024
+        ],
+        "critic_hidden_layers": [
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          2048,
+          2048,
+          2048,
+          1024
+        ],
+        "nq": 84,
+        "nu": 330,
+        "nv": 83,
+        "observation_dim": 2277
+      },
+      "nvidia_smi_peak_used_vram_bytes": 25034752000,
+      "peak_allocated_vram_bytes": 5476738304,
+      "repeat": 1,
+      "requested_timesteps": 983040,
+      "seed": 0,
+      "setup_seconds": 7.369327221999811,
+      "status": "success",
+      "timesteps_per_second": 10617.30882313967
+    },
+    {
+      "config_name": "conf_osl_fullbody",
+      "env_count": 2048,
+      "execution_seconds": 94.39307506500063,
+      "gpu_utilization_max_percent": 100.0,
+      "gpu_utilization_mean_percent": 99.54861111111111,
+      "jax_preallocate": true,
+      "jit_compile_seconds": 30.409370276000118,
+      "model": "fullbody",
+      "model_dimensions": {
+        "action_dim": 330,
+        "actor_hidden_layers": [
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          2048,
+          2048,
+          2048,
+          1024
+        ],
+        "critic_hidden_layers": [
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          1024,
+          2048,
+          2048,
+          2048,
+          1024
+        ],
+        "nq": 84,
+        "nu": 330,
+        "nv": 83,
+        "observation_dim": 2277
+      },
+      "nvidia_smi_peak_used_vram_bytes": 25014829056,
+      "peak_allocated_vram_bytes": 5476739584,
+      "repeat": 2,
+      "requested_timesteps": 983040,
+      "seed": 0,
+      "setup_seconds": 7.483335771000384,
+      "status": "success",
+      "timesteps_per_second": 10414.32328932035
+    }
+  ],
+  "schema_version": 1,
+  "status": "complete"
+}
