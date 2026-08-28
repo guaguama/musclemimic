@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from hydra import compose, initialize_config_dir
 
 from loco_mujoco.core.mujoco_base import Mujoco
 from musclemimic.environments.humanoids import MjxOSLFullBodyRobot, OSLFullBodyRobot
+from scripts import analyze_osl_fullbody_robot_actuators as analyzer
 from scripts import generate_osl_fullbody_robot as generator
 
 
@@ -167,6 +169,56 @@ def test_actuator_order_standard_servo_parameters_and_passive_coordinates(robot_
     equality_follower_ids = set(model.eq_obj1id[model.eq_objtype == mujoco.mjtObj.mjOBJ_JOINT])
     assert equality_follower_ids.isdisjoint(targeted_joint_ids)
     assert not np.any(model.jnt_type == mujoco.mjtJoint.mjJNT_BALL)
+
+
+def test_servo_gains_satisfy_the_sizing_rules_at_the_reference_pose(robot_model):
+    """Pin the sizing *rules*, not the table-to-XML copy.
+
+    ``test_actuator_order_...`` asserts XML <-> POSITION_SERVOS, so it stays green
+    even if both were regenerated from a bad measurement.  This recomputes the
+    rules from scratch against a freshly measured, servo-free and contact-free
+    ``I_eff`` and fails loudly on a regeneration that used a contaminated probe --
+    which showed up as zeta 0.61-0.72 on the shoulder rather than 1.0.
+
+    Scope: this is a *reference-pose* invariant.  ``I_eff`` is pose-dependent, so
+    zeta is only 1.0 at the pose the table was sized at; the stability margin
+    below is likewise not a global worst case over the joint ranges.
+    """
+    servos = analyzer.servo_actuators(robot_model)
+    reference = analyzer.project_joint_equalities(robot_model, robot_model.qpos0)
+    # strict=True: a nonlinear probe here means the invariant cannot be checked.
+    inertia = analyzer.constrained_inertia(
+        robot_model, reference, [dof for _, _, _, dof in servos]
+    )
+    assert np.all(np.isfinite(inertia))
+
+    table = {name: (kp, kd, limit) for name, kp, kd, limit in generator.POSITION_SERVOS}
+    stability = {}
+    for index, (_, joint_name, _, _) in enumerate(servos):
+        kp, kd, force_limit = table[joint_name]
+        moment_of_inertia = inertia[index]
+
+        # Rule 2, with atol for the 1-decimal Kp stored in POSITION_SERVOS.
+        expected_kp = min(force_limit / 0.35, moment_of_inertia * 150.0**2)
+        assert kp == pytest.approx(expected_kp, abs=0.051), joint_name
+
+        # Rule 3: critically damped.
+        zeta = kd / (2.0 * math.sqrt(kp * moment_of_inertia))
+        assert zeta == pytest.approx(1.0, abs=0.01), f"{joint_name} zeta={zeta:.3f}"
+
+        # The training env runs at 2 ms, not the XML's 1 ms.
+        stability[joint_name] = kd * 0.002 / moment_of_inertia
+
+    worst = max(stability, key=stability.get)
+    assert stability[worst] < 1.0, f"{worst} Kd*dt/I={stability[worst]:.3f}"
+
+    # Bilateral arm pairs must match in the stored table.  Contact-free the raw
+    # inertias differ in the 4th significant figure -- genuinely, since the arm
+    # reacts against a body whose right leg is a prosthesis -- so compare the
+    # rounded values that actually ship, not the measurement.
+    for stem in ("elv_angle", "shoulder_elv", "shoulder_rot", "elbow_flex",
+                 "pro_sup", "deviation", "flexion"):
+        assert table[f"{stem}_r"] == table[f"{stem}_l"], stem
 
 
 def test_osl_motor_parameters_are_unchanged(robot_model):

@@ -21,6 +21,14 @@ motion-independent: no trajectory clip enters any parameter.
 3. ``Kd = 2 * zeta * sqrt(Kp * I_eff)`` -- a target damping ratio rather than a
    flat per-region constant.
 
+``I_eff`` in rules 2 and 3 is the equality-constrained inertia of the *mechanism*,
+measured on a servo-neutralised, contact-free copy (:func:`servo_free_copy`).  Both
+neutralisations matter.  Probing the actuated robot makes the finite difference
+nonlinear and reports arm inertia 48-62% low; probing with self-contacts live sizes
+the arms against qpos0's 21.47 mm humerus/thorax interpenetration, which triples
+measured shoulder inertia and leaves ``shoulder_rot`` at ``Kd * dt / I`` = 1.735 --
+87% of the Euler bound -- as soon as the arms separate.
+
 Rule 3 is what keeps explicit Euler viable.  Since ``Kd / I = 2 * zeta * omega``,
 the stability condition ``Kd * dt / I < 2`` becomes ``zeta * omega * dt < 1``,
 satisfied automatically at any sane bandwidth.  A flat per-region ``Kd`` carries
@@ -47,8 +55,10 @@ effective inertia that clip reaches.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
+import warnings
 from pathlib import Path
 
 import mujoco
@@ -72,13 +82,24 @@ def servo_actuators(model: mujoco.MjModel) -> list[tuple[int, str, int, int]]:
     return out
 
 
-def constrained_inertia(model: mujoco.MjModel, qpos: np.ndarray, dofs: list[int]) -> np.ndarray:
-    """Effective inertia per dof with the equality constraints active.
+def _probe_inertia(model: mujoco.MjModel, qpos: np.ndarray, dofs: list[int],
+                   *, strict: bool = True, rtol: float = 1e-3) -> np.ndarray:
+    """Effective inertia by unit-force probe, guarded for linearity.
+
+    Takes ``model`` exactly as given -- it does **not** neutralise anything.  Use
+    :func:`constrained_inertia` unless you specifically need the unguarded model,
+    which in practice means testing the guard itself.
 
     ``mj_fullM`` reports the inertia with every other coordinate locked, which
-    overstates a joint that drives equality followers.  Applying a unit force
-    and differencing the acceleration against the unforced pose measures what
-    the servo actually accelerates.
+    overstates a joint that drives equality followers.  Applying a unit
+    generalized force and differencing the acceleration against the unforced pose
+    measures what the servo actually accelerates.
+
+    That difference is only inertia if the response is **linear in the applied
+    force**, so each dof is probed at 1 N*m and 2 N*m and checked for
+    superposition.  A nonlinear response is not a small error: measured on the
+    servo'd robot at qpos0, arm inertia comes out 48-62% low and manufactures a
+    27% left/right asymmetry at a bilaterally symmetric pose.
     """
     base = mujoco.MjData(model)
     base.qpos[:] = qpos
@@ -86,13 +107,90 @@ def constrained_inertia(model: mujoco.MjModel, qpos: np.ndarray, dofs: list[int]
     reference = base.qacc.copy()
 
     inertia = np.empty(len(dofs))
+    offenders: list[tuple[int, float]] = []
     for index, dof in enumerate(dofs):
-        data = mujoco.MjData(model)
-        data.qpos[:] = qpos
-        data.qfrc_applied[dof] = 1.0
-        mujoco.mj_forward(model, data)
-        inertia[index] = 1.0 / max(data.qacc[dof] - reference[dof], 1e-12)
+        deltas = []
+        for force in (1.0, 2.0):
+            data = mujoco.MjData(model)
+            data.qpos[:] = qpos
+            data.qfrc_applied[dof] = force
+            mujoco.mj_forward(model, data)
+            deltas.append(data.qacc[dof] - reference[dof])
+
+        # A non-finite or non-positive response is not a large inertia, it is an
+        # invalid probe.  Clamping it to a tiny epsilon would silently report an
+        # enormous inertia instead.
+        if not np.isfinite(deltas).all() or deltas[0] <= 0.0:
+            offenders.append((index, float("inf")))
+            inertia[index] = np.nan
+            continue
+
+        error = abs(deltas[1] - 2.0 * deltas[0]) / max(abs(2.0 * deltas[0]), 1e-30)
+        if error > rtol:
+            offenders.append((index, error))
+        inertia[index] = 1.0 / deltas[0]
+
+    if offenders:
+        detail = ", ".join(f"dof {dofs[i]} (err={e:.2e})" for i, e in offenders)
+        if strict:
+            raise RuntimeError(
+                f"inertia probe is nonlinear at {len(offenders)}/{len(dofs)} dofs, so "
+                f"1/(qacc_forced - qacc_ref) is not inertia: {detail}. "
+                "Probe a servo-neutralised, contact-free copy (see constrained_inertia)."
+            )
+        warnings.warn(
+            f"inertia probe nonlinear at {len(offenders)}/{len(dofs)} dofs; "
+            "values are approximate",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     return inertia
+
+
+def servo_free_copy(model: mujoco.MjModel) -> mujoco.MjModel:
+    """A copy with the position servos disarmed and contacts off, for measurement.
+
+    Two things have to go before an inertia probe means anything:
+
+    * **The servos.**  ``biasprm[0] = Kp * midpoint``, so at ``ctrl = 0`` each servo
+      commands its joint-range *midpoint* rather than holding position.  At qpos0
+      that saturates 7 of 29 actuators and drives ``|qacc|`` to 7070 rad/s^2.  The
+      force itself cancels between the two probes -- it depends only on ``(q, qdot)``,
+      which both share -- but it is what pushes the contacts nonlinear.
+    * **Contacts.**  At qpos0 both humeri sit 21.47 mm inside ``thorax_coll1`` at
+      ~1346 N per side, via explicit ``<pair>`` elements.  Under the servo loads a
+      pyramidal facet multiplier clamps to zero across the probe
+      (2.1999 -> 0.5935 -> 0), which is a piecewise-linear transition even though
+      ``nefc`` never changes -- a constant row count is not a constant active set.
+      That self-contact also triples measured shoulder inertia (3.3745 vs 1.1227),
+      so sizing against it is sizing against an artifact of the reference pose.
+
+    Only ``mjDSBL_CONTACT`` actually disables them: zeroing ``geom_contype`` /
+    ``geom_conaffinity`` leaves explicit ``<pair>`` contacts in force and ``nefc``
+    unchanged at 53.
+
+    Joint limits are deliberately left alone -- they move the result by 3e-13 at
+    qpos0 -- and gravity cancels in the difference.
+    """
+    neutral = copy.copy(model)  # independent in MuJoCo 3.4.0
+    for actuator, _, _, _ in servo_actuators(neutral):
+        neutral.actuator_gainprm[actuator, 0] = 0.0
+        neutral.actuator_biasprm[actuator, :3] = 0.0
+    neutral.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_CONTACT
+    return neutral
+
+
+def constrained_inertia(model: mujoco.MjModel, qpos: np.ndarray, dofs: list[int],
+                        *, strict: bool = True) -> np.ndarray:
+    """Equality-constrained effective inertia of the *mechanism*.
+
+    Defensive wrapper: measures on :func:`servo_free_copy` so a caller cannot
+    accidentally probe the actuated robot, which is the bug this replaced.  Pass
+    ``strict=False`` for diagnostic poses where a nonlinear probe should warn
+    rather than abort -- trajectory frames with joints riding their limits still
+    trip the guard even contact-free.
+    """
+    return _probe_inertia(servo_free_copy(model), qpos, dofs, strict=strict)
 
 
 def equality_children(model: mujoco.MjModel) -> dict[int, list[tuple[int, np.ndarray]]]:
@@ -301,6 +399,7 @@ def main() -> int:
     # Diagnostics only.
     load = np.zeros(len(servos))
     inertia_min = inertia
+    approximate = 0
     if args.trajectory is not None:
         frames = np.load(args.trajectory, allow_pickle=True)["qpos"].astype(np.float64)
         frames = frames[::args.stride]
@@ -311,12 +410,23 @@ def main() -> int:
             mujoco.mj_forward(robot, data)
             loads.append([abs(data.qfrc_bias[dof]) for dof in dofs])
         load = np.percentile(np.array(loads), 95, axis=0)
-        inertia_min = np.min([constrained_inertia(robot, frame, dofs) for frame in frames], axis=0)
+        # Diagnostic poses are not guaranteed linear even contact-free: joints
+        # riding their limits trip the guard on roughly a quarter of frames.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", RuntimeWarning)
+            per_frame = [constrained_inertia(robot, frame, dofs, strict=False)
+                         for frame in frames]
+            approximate = len(caught)
+        inertia_min = np.nanmin(np.array(per_frame), axis=0)
 
     print(f"model {ROBOT_XML.relative_to(REPO_ROOT)}  dt={dt}  "
           f"integrator={mujoco.mjtIntegrator(robot.opt.integrator).name}")
     print("sizing poses: equality-reconciled qpos0 + all-midrange, each swept per joint")
-    print(f"diagnostics:  {args.trajectory.name if args.trajectory else '(none)'}\n")
+    print(f"diagnostics:  {args.trajectory.name if args.trajectory else '(none)'}")
+    if args.trajectory is not None and approximate:
+        print(f"              WARNING: {approximate}/{len(frames)} frames had a nonlinear "
+              f"inertia probe; the Kd*dt/I column is approximate")
+    print()
 
     header = (f"{'joint':22s} {'u=-1':>7s} {'u=+1':>7s} {'lo':>7s} {'hi':>7s} {'in-rng':>7s} "
               f"{'I_eq':>7s} {'Kp':>7s} {'Kd':>6s} {'wn':>6s} {'zeta':>6s} {'Kd*dt/I':>8s} "

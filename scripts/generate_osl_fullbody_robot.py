@@ -42,7 +42,17 @@ exposes the three knobs (``--saturation-error``, ``--max-bandwidth``,
    20 degrees of tracking error, capped at a 150 rad/s natural frequency.
 
 3. ``Kd = 2 * zeta * sqrt(Kp * I_eff)`` with ``zeta = 1``, where ``I_eff`` is the
-   equality-constrained effective inertia at the reconciled qpos0.
+   equality-constrained effective inertia of the *mechanism* at the reconciled
+   qpos0 -- measured with the position servos disarmed and contacts disabled.
+
+   Both neutralisations are load-bearing.  Probing the actuated robot makes the
+   finite difference nonlinear (at ``ctrl = 0`` every servo commands its range
+   midpoint, saturating 7 of 29 actuators) and reports arm inertia 48-62% low.
+   Probing with contacts live sizes the arms against qpos0's 21.47 mm
+   humerus/thorax interpenetration, which triples measured shoulder inertia; on
+   that basis ``shoulder_rot`` sat at ``Kd * dt / I`` = 1.735 -- 87% of the Euler
+   bound -- as soon as the arms separated.  qpos0 is only an XML default and is
+   never a pose the model holds, but it corrupts any measurement taken there.
 
 Rule 3 is what keeps explicit Euler viable.  ``Kd / I = 2 * zeta * omega``, so the
 stability condition ``Kd * dt / I < 2`` reduces to ``zeta * omega * dt < 1``,
@@ -128,33 +138,33 @@ FINGER_JOINTS = (
 POSITION_SERVOS = (
     # Torso.
     ("flex_extension",       871.4,  68.54,  305.0),
-    ("lat_bending",         1228.6,  90.33,  430.0),
-    ("axial_rotation",       771.4,  30.26,  270.0),
+    ("lat_bending",         1228.6,  87.52,  430.0),
+    ("axial_rotation",       771.4,  30.21,  270.0),
     # Right arm.
     ("elv_angle_r",          442.9,  38.73,  155.0),           # 0 N*m at qpos0 alone (gimbal singularity)
-    ("shoulder_elv_r",       314.3,  65.13,  110.0),
-    ("shoulder_rot_r",       257.1,   4.69,   90.0),
-    ("elbow_flex_r",         242.9,   7.07,   85.0),
-    ("pro_sup_r",             42.9,   0.78,   15.0),
+    ("shoulder_elv_r",       314.3,  37.57,  110.0),
+    ("shoulder_rot_r",       121.6,   1.62,   90.0),
+    ("elbow_flex_r",         242.9,   6.20,   85.0),
+    ("pro_sup_r",             42.9,   0.64,   15.0),
     ("deviation_r",           68.6,   0.91,   35.0),
-    ("flexion_r",             82.1,   1.09,   40.0),
+    ("flexion_r",             81.0,   1.08,   40.0),
     # Left arm -- identical to the right: both sizing poses are bilaterally
     # symmetric, so every pair falls out equal with no manual symmetrization.
     ("elv_angle_l",          442.9,  38.73,  155.0),           # 0 N*m at qpos0 alone (gimbal singularity)
-    ("shoulder_elv_l",       314.3,  65.13,  110.0),
-    ("shoulder_rot_l",       257.1,   4.69,   90.0),
-    ("elbow_flex_l",         242.9,   7.07,   85.0),
-    ("pro_sup_l",             42.9,   0.78,   15.0),
+    ("shoulder_elv_l",       314.3,  37.57,  110.0),
+    ("shoulder_rot_l",       121.6,   1.62,   90.0),
+    ("elbow_flex_l",         242.9,   6.20,   85.0),
+    ("pro_sup_l",             42.9,   0.64,   15.0),
     ("deviation_l",           68.6,   0.91,   35.0),
-    ("flexion_l",             82.1,   1.09,   40.0),
+    ("flexion_l",             81.0,   1.08,   40.0),
     # Residual right hip.  Genuinely weaker than the left -- the amputation removes
     # muscles crossing this hip -- so do NOT symmetrize these with the left leg.
     ("hip_flexion_r",        814.3,  22.78,  285.0),
-    ("hip_adduction_r",      671.4,  23.23,  235.0),
-    ("hip_rotation_r",       457.1,  10.62,  160.0),
+    ("hip_adduction_r",      671.4,  23.15,  235.0),
+    ("hip_rotation_r",       457.1,  10.61,  160.0),
     # Intact left leg.
     ("hip_flexion_l",       1600.0,  34.16,  560.0),
-    ("hip_adduction_l",     1200.0,  39.63,  420.0),
+    ("hip_adduction_l",     1200.0,  39.37,  420.0),
     ("hip_rotation_l",       528.6,   9.23,  185.0),
     ("knee_angle_l",        1557.1,  26.99,  545.0),
     ("ankle_angle_l",        343.8,   4.58,  425.0),           # Kp bandwidth-capped at wn=150

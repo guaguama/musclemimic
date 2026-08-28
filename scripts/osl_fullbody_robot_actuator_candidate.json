@@ -3,189 +3,189 @@
     "forcerange": 305.0,
     "kp": 871.4,
     "kd": 68.54,
-    "inertia": 1.3478254492738038,
+    "inertia": 1.347754175730917,
     "peak_at": "midrange@+1d"
   },
   "lat_bending": {
     "forcerange": 430.0,
     "kp": 1228.6,
-    "kd": 90.33,
-    "inertia": 1.6602656048181337,
+    "kd": 87.52,
+    "inertia": 1.5586754194512884,
     "peak_at": "qpos0@-25d"
   },
   "axial_rotation": {
     "forcerange": 270.0,
     "kp": 771.4,
-    "kd": 30.26,
-    "inertia": 0.2967699325955233,
+    "kd": 30.21,
+    "inertia": 0.29574435576220265,
     "peak_at": "qpos0@+45d"
   },
   "elv_angle_r": {
     "forcerange": 155.0,
     "kp": 442.9,
     "kd": 38.73,
-    "inertia": 0.8467361184670605,
+    "inertia": 0.8466290486477582,
     "peak_at": "midrange@+1d"
   },
   "shoulder_elv_r": {
     "forcerange": 110.0,
     "kp": 314.3,
-    "kd": 65.13,
-    "inertia": 3.3744823135769657,
+    "kd": 37.57,
+    "inertia": 1.1226871232636537,
     "peak_at": "qpos0@+90d"
   },
   "shoulder_rot_r": {
     "forcerange": 90.0,
-    "kp": 257.1,
-    "kd": 4.69,
-    "inertia": 0.02138371933423613,
+    "kp": 121.6,
+    "kd": 1.62,
+    "inertia": 0.005406305491385709,
     "peak_at": "midrange@-53d"
   },
   "elbow_flex_r": {
     "forcerange": 85.0,
     "kp": 242.9,
-    "kd": 7.07,
-    "inertia": 0.05149982612132764,
+    "kd": 6.2,
+    "inertia": 0.039534698452928445,
     "peak_at": "qpos0@+81d"
   },
   "pro_sup_r": {
     "forcerange": 15.0,
     "kp": 42.9,
-    "kd": 0.78,
-    "inertia": 0.0035357194213241623,
+    "kd": 0.64,
+    "inertia": 0.0023941317686530838,
     "peak_at": "midrange@-54d"
   },
   "deviation_r": {
     "forcerange": 35.0,
     "kp": 68.6,
     "kd": 0.91,
-    "inertia": 0.0030482762391864236,
+    "inertia": 0.0030474510488738807,
     "peak_at": "qpos0@+24d"
   },
   "flexion_r": {
     "forcerange": 40.0,
-    "kp": 82.1,
-    "kd": 1.09,
-    "inertia": 0.0036476811244182663,
+    "kp": 81.0,
+    "kd": 1.08,
+    "inertia": 0.003597943261079627,
     "peak_at": "qpos0@+29d"
   },
   "elv_angle_l": {
     "forcerange": 155.0,
     "kp": 442.9,
     "kd": 38.73,
-    "inertia": 0.8467355165606412,
+    "inertia": 0.8466283446610744,
     "peak_at": "midrange@+1d"
   },
   "shoulder_elv_l": {
     "forcerange": 110.0,
     "kp": 314.3,
-    "kd": 65.13,
-    "inertia": 3.374215228215213,
+    "kd": 37.57,
+    "inertia": 1.1225782753115987,
     "peak_at": "qpos0@+90d"
   },
   "shoulder_rot_l": {
     "forcerange": 90.0,
-    "kp": 257.1,
-    "kd": 4.69,
-    "inertia": 0.021381360393318952,
+    "kp": 121.6,
+    "kd": 1.62,
+    "inertia": 0.005406241340878882,
     "peak_at": "midrange@-53d"
   },
   "elbow_flex_l": {
     "forcerange": 85.0,
     "kp": 242.9,
-    "kd": 7.07,
-    "inertia": 0.051499312333107145,
+    "kd": 6.2,
+    "inertia": 0.03953659362070407,
     "peak_at": "qpos0@+81d"
   },
   "pro_sup_l": {
     "forcerange": 15.0,
     "kp": 42.9,
-    "kd": 0.78,
-    "inertia": 0.003535669409636776,
+    "kd": 0.64,
+    "inertia": 0.002394142020982602,
     "peak_at": "midrange@-54d"
   },
   "deviation_l": {
     "forcerange": 35.0,
     "kp": 68.6,
     "kd": 0.91,
-    "inertia": 0.0030482744677818386,
+    "inertia": 0.003047450666685226,
     "peak_at": "qpos0@+24d"
   },
   "flexion_l": {
     "forcerange": 40.0,
-    "kp": 82.1,
-    "kd": 1.09,
-    "inertia": 0.0036476796661747356,
+    "kp": 81.0,
+    "kd": 1.08,
+    "inertia": 0.0035979450781269675,
     "peak_at": "qpos0@+29d"
   },
   "hip_flexion_r": {
     "forcerange": 285.0,
     "kp": 814.3,
     "kd": 22.78,
-    "inertia": 0.15935312276891825,
+    "inertia": 0.15933915139470742,
     "peak_at": "qpos0@-4d"
   },
   "hip_adduction_r": {
     "forcerange": 235.0,
     "kp": 671.4,
-    "kd": 23.23,
-    "inertia": 0.2009879605412351,
+    "kd": 23.15,
+    "inertia": 0.1995517580851403,
     "peak_at": "midrange@-28d"
   },
   "hip_rotation_r": {
     "forcerange": 160.0,
     "kp": 457.1,
-    "kd": 10.62,
-    "inertia": 0.06164260837172204,
+    "kd": 10.61,
+    "inertia": 0.06160245262123582,
     "peak_at": "qpos0@+32d"
   },
   "hip_flexion_l": {
     "forcerange": 560.0,
     "kp": 1600.0,
     "kd": 34.16,
-    "inertia": 0.18233906490730017,
+    "inertia": 0.18232023888014698,
     "peak_at": "qpos0@+30d"
   },
   "hip_adduction_l": {
     "forcerange": 420.0,
     "kp": 1200.0,
-    "kd": 39.63,
-    "inertia": 0.32726632863573407,
+    "kd": 39.37,
+    "inertia": 0.3228995070629928,
     "peak_at": "qpos0@-36d"
   },
   "hip_rotation_l": {
     "forcerange": 185.0,
     "kp": 528.6,
     "kd": 9.23,
-    "inertia": 0.04026749964384397,
+    "inertia": 0.040253243705342646,
     "peak_at": "qpos0@+40d"
   },
   "knee_angle_l": {
     "forcerange": 545.0,
     "kp": 1557.1,
     "kd": 26.99,
-    "inertia": 0.11694318365129071,
+    "inertia": 0.11694297577267575,
     "peak_at": "qpos0@+42d"
   },
   "ankle_angle_l": {
     "forcerange": 425.0,
     "kp": 343.8,
     "kd": 4.58,
-    "inertia": 0.015281250838777051,
+    "inertia": 0.015280891803137717,
     "peak_at": "qpos0@-7d"
   },
   "subtalar_angle_l": {
     "forcerange": 135.0,
     "kp": 304.6,
     "kd": 4.06,
-    "inertia": 0.01353940561969757,
+    "inertia": 0.013539196879019132,
     "peak_at": "midrange@-20d"
   },
   "mtp_angle_l": {
     "forcerange": 5.0,
     "kp": 14.3,
     "kd": 0.76,
-    "inertia": 0.010115642224596027,
+    "inertia": 0.010115642220777963,
     "peak_at": "qpos0@-9d"
   }
 }
