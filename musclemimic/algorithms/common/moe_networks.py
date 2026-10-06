@@ -7,6 +7,8 @@ import jax.numpy as jnp
 import numpy as np
 from flax.linen.initializers import constant, normal, orthogonal
 
+from musclemimic.algorithms.common.networks import actor_output_bias_initializer
+
 
 class SoftMoELayer(nn.Module):
     """
@@ -159,12 +161,21 @@ class SoftMoEActorCritic(nn.Module):
     gate_init_std: float = 0.01
     use_layernorm: bool = False
     layernorm_eps: float = 1e-5
+    actor_bias_init: Sequence[float] | None = None
 
     def setup(self):
         from musclemimic.algorithms.common.networks import RunningMeanStd, get_activation_fn
 
         self.activation_fn = get_activation_fn(self.activation)
         self.running_mean_std = RunningMeanStd()
+        self.actor_output_bias_init = actor_output_bias_initializer(self.actor_bias_init, self.action_dim)
+        if (
+            self.apply_moe_to_output
+            and self.apply_moe_to in ("actor", "both")
+            and self.actor_bias_init is not None
+            and np.any(np.asarray(self.actor_bias_init) != 0)
+        ):
+            raise ValueError("Nonzero actor_bias_init is unsupported for an MoE actor output")
 
     def _build_network(self, x, is_actor=True, return_metrics=False):
         """Build either actor or critic network with optional MoE layers."""
@@ -257,7 +268,7 @@ class SoftMoEActorCritic(nn.Module):
             x = nn.Dense(
                 output_dim,
                 kernel_init=orthogonal(0.01),
-                bias_init=constant(0.0),
+                bias_init=self.actor_output_bias_init if is_actor else constant(0.0),
                 name=f"{'actor' if is_actor else 'critic'}_output",
             )(x)
 

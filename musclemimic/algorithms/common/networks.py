@@ -3,8 +3,24 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
 from flax.linen.initializers import constant, orthogonal
-from typing import Sequence
+from typing import Callable, Sequence
 import distrax
+
+
+def actor_output_bias_initializer(values, action_dim):
+    """Validate a fresh actor bias and preserve the output parameter's dtype."""
+    if values is None:
+        return constant(0.0)
+    values = np.asarray(values)
+    if values.shape != (action_dim,):
+        raise ValueError(f"actor_bias_init shape {values.shape} must be ({action_dim},)")
+    if not np.all(np.isfinite(values)):
+        raise ValueError("actor_bias_init must contain only finite values")
+
+    def initialize(key, shape, dtype=jnp.float32):
+        return jnp.asarray(values, dtype=dtype)
+
+    return initialize
 
 
 def get_activation_fn(name: str):
@@ -26,6 +42,7 @@ class FullyConnectedNet(nn.Module):
     squeeze_output: bool = True
     use_layernorm: bool = False
     layernorm_eps: float = 1e-5
+    output_bias_init: Callable | None = None
 
     def setup(self):
         self.activation_fn = get_activation_fn(self.activation)
@@ -46,7 +63,11 @@ class FullyConnectedNet(nn.Module):
             x = self.activation_fn(x)
 
         # add last layer
-        x = nn.Dense(self.output_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(x)
+        x = nn.Dense(
+            self.output_dim,
+            kernel_init=orthogonal(0.01),
+            bias_init=self.output_bias_init if self.output_bias_init is not None else constant(0.0),
+        )(x)
         x = self.output_activation_fn(x)
 
         return jnp.squeeze(x) if self.squeeze_output else x
@@ -84,6 +105,7 @@ class ResidualFCNet(nn.Module):
     residual_gate_init: float = -2.0
     residual_second_gain: float = 0.01
     proj_gain: float = 1.0
+    output_bias_init: Callable | None = None
 
     def setup(self):
         self.activation_fn = get_activation_fn(self.activation)
@@ -158,7 +180,7 @@ class ResidualFCNet(nn.Module):
         x = nn.Dense(
             self.output_dim,
             kernel_init=orthogonal(0.01),
-            bias_init=constant(0.0),
+            bias_init=self.output_bias_init if self.output_bias_init is not None else constant(0.0),
             name="output",
         )(x)
 
@@ -183,6 +205,7 @@ class ActorCritic(nn.Module):
     use_residual: bool = False
     residual_type: str = "gated"
     residual_gate_init: float = -2.0
+    actor_bias_init: Sequence[float] | None = None
 
     def setup(self):
         self.activation_fn = get_activation_fn(self.activation)
@@ -193,6 +216,7 @@ class ActorCritic(nn.Module):
         x = RunningMeanStd()(x)
 
         # build actor
+        output_bias_init = actor_output_bias_initializer(self.actor_bias_init, self.action_dim)
         actor_x = x if self.actor_obs_ind is None else x[..., self.actor_obs_ind]
         if self.use_residual:
             actor_mean = ResidualFCNet(
@@ -204,6 +228,7 @@ class ActorCritic(nn.Module):
                 residual_type=self.residual_type,
                 residual_gate_init=self.residual_gate_init,
                 name="actor",
+                output_bias_init=output_bias_init,
             )(actor_x)
         else:
             actor_mean = FullyConnectedNet(
@@ -216,6 +241,7 @@ class ActorCritic(nn.Module):
                 use_layernorm=self.use_layernorm,
                 layernorm_eps=self.layernorm_eps,
                 name="actor",
+                output_bias_init=output_bias_init,
             )(actor_x)
         init_std_arr = jnp.asarray(self.init_std, dtype=jnp.float32)
         if init_std_arr.ndim == 0:

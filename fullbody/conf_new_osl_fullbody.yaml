@@ -1,0 +1,424 @@
+# =============================================================================
+# Standalone training config for NewOSLFullBody — the OFFICIAL MyoAssist full-body
+# model with the OSL knee-ankle prosthesis (models/new_osl_fullbody), as opposed to
+# the hand-assembled model conf_osl_fullbody.yaml drives.
+#
+# Standalone rather than inheriting from conf_osl_fullbody.yaml on purpose: OmegaConf
+# merges dicts, so reward_params.joint_torque_weights would keep the old model's
+# osl_knee_angle_r / osl_ankle_angle_r keys, and mj_jntname2qvelid RAISES on a joint
+# name the model does not have. A child config cannot delete an inherited key.
+#
+# Differences from conf_osl_fullbody.yaml:
+#   - env_name: MjxNewOSLFullBody
+#   - compliant_socket: the socket toggle (see below)
+#   - joint_torque_weights keyed on the official OSL_KA_L1_* joint names
+# Everything else — the 17 mimic sites, goal, reward weights, termination, Warp
+# settings, PPO schedule, validation — is identical.
+#
+# THE SOCKET TOGGLE
+#   compliant_socket: false (default) loads models/new_osl_fullbody/body/
+#       new_osl_fullbody.xml — the official rigid weld, nq 120 (80 fingerless).
+#   compliant_socket: true loads new_osl_fullbody_compliant_socket.xml — the four
+#       compliant DoFs from the hand-built model, nq 124 (84 fingerless).
+#   disable_eulerdamp follows `not compliant_socket` automatically: the rigid socket
+#   is inside the explicit-Euler bound (worst dof_damping*dt/M_ii = 0.995 at 2 ms) so
+#   damping may be explicit like plain MyoFullBody; the compliant socket reaches 15.68
+#   and needs implicit damping. Setting both true raises rather than diverging.
+#   Toggle on the CLI with experiment.env_params.compliant_socket=true.
+#   NOTE the toggle changes nq/nv and therefore the observation size — checkpoints do
+#   not transfer across it.
+#
+# TRAJECTORIES (regenerated for this model by the clipper repo, 2026-08-28):
+#     .../clipper/outputs/musclemimic/new_osl_fullbody/
+#         WalkingStraightForwards03_poses_crop0-521_z-0.025_ankle-7.npz
+#   522 frames @ 100 Hz, split_points [0, 522]. An EXACT match for the rigid socket:
+#   74/74 joint names in identical order with identical jnt_type, and 17/17 mimic
+#   sites matching sites_for_mimic in order. Forward kinematics on this model
+#   reproduces the clip's recorded site_xpos to 1.2e-07 m, because clipper vendors a
+#   byte-identical copy of models/new_osl_fullbody -- see that model's README.md.
+#
+#   With compliant_socket: true the clip is still correct: it does not name the four
+#   socket DoFs, which the env pads to 0.0 (= the neutral socket, i.e. exactly the
+#   rigid configuration). The gate exempts those four joints and nothing else.
+#
+#   The legacy osl_fullbody clip is kept commented out below. It is REJECTED by the
+#   name-coverage gate -- its joint names predate the official export by four renames
+#   (elbow_flexion_{l,r}, OSL_KA_L1_osl_{knee,ankle}_angle_r) -- which is the gate's
+#   whole purpose, since filter_and_extend would otherwise zero-pad them silently and
+#   train against straight arms and a frozen prosthesis.
+#
+# Usage:
+#   uv run fullbody/experiment.py --config-name=conf_new_osl_fullbody
+# =============================================================================
+
+defaults:
+  - override hydra/job_logging: default
+  - override hydra/launcher: basic
+
+# =============================================================================
+# Weights & Biases
+# =============================================================================
+wandb:
+  project: "musclemimic"
+  mode: "online"  # Options: online, offline, disabled
+  tags: ["fullbody", "new_osl_fullbody", "forward_walking"]
+
+experiment:
+  # ===========================================================================
+  # Task factory — trajectory selection.
+  # Direct load of pre-retargeted env-format .npz (no GMR). Set dataset_group:
+  # null so only the explicit traj_path files are used. traj_path accepts a
+  # string or a list of absolute paths. Override on the CLI as e.g.
+  #   experiment.task_factory.params.amass_dataset_conf.traj_path=[/abs/a.npz,/abs/b.npz]
+  # ===========================================================================
+  task_factory:
+    name: ImitationFactory
+    params:
+      amass_dataset_conf:
+        dataset_group: null
+        trajectory_cache_type: "sparse"
+        traj_path:
+          - /home/dmma/src/00_AMBER/00_projbackflip/clipper/outputs/musclemimic/new_osl_fullbody/WalkingStraightForwards03_poses_crop0-521_z-0.025_ankle-7.npz
+          # Legacy hand-assembled-model clip -- rejected by the gate, see the header.
+          # - /home/dmma/src/00_AMBER/00_projbackflip/clipper/outputs/musclemimic/osl_fullbody/WalkingStraightForwards03_poses_crop0-521_ankle-7.npz
+
+  # ===========================================================================
+  # Environment
+  # ===========================================================================
+  env_params:
+    env_name: MjxNewOSLFullBody
+    # Socket toggle — see the header. disable_eulerdamp tracks `not compliant_socket`
+    # unless set explicitly; compliant_socket=true + disable_eulerdamp=true raises.
+    compliant_socket: false
+    # disable_eulerdamp: false
+    strict_trajectory_joints: true
+    headless: True
+    horizon: 30000
+    disable_fingers: true  # Model has bimanual arms; trajectory has no finger joints.
+    mjx_backend: warp
+    num_envs: 2048
+
+    # Observations
+    enable_muscle_length_observations: true
+    enable_muscle_velocity_observations: true
+    enable_muscle_force_observations: true
+    enable_muscle_excitation_observations: true
+    enable_muscle_activation_observations: true
+    enable_touch_sensor_observations: true
+
+    # init_state_type: PerturbedTrajInitialStateHandler
+    # init_state_params:
+    #   qpos_noise_std: 0.01          # rad; scalar, or a length-nq (84) list
+    #   qvel_noise_std: 0.05          # rad/s; scalar, or a length-nv (83) list
+    #   perturb_free_joint_pos: false
+    #   perturb_free_joint_quat: false
+    #   perturb_free_joint_vel: false
+    #   perturb_ball_joints: false
+
+    init_state_type: TrajInitialStateHandler
+
+    # -------------------------------------------------------------------------
+    # Goal — what the policy is conditioned on (full 17-site full-body set)
+    # -------------------------------------------------------------------------
+    goal_type: GoalTrajMimic
+    goal_params:
+      n_step_lookahead: 5
+      n_step_stride: 20
+      upper_body_xml_name: torso
+      enable_motion_phase: true        # Include motion phase [0,1] in goal observation
+      use_concise_lookahead: true      # Use root_pos/vel deltas + site_rpos only (smaller obs)
+      sites_for_mimic:
+        - pelvis_mimic
+        - upper_body_mimic
+        - head_mimic
+        - left_shoulder_mimic
+        - left_elbow_mimic
+        - left_hand_mimic
+        - right_shoulder_mimic
+        - right_elbow_mimic
+        - right_hand_mimic
+        - left_hip_mimic
+        - left_knee_mimic
+        - left_ankle_mimic
+        - left_toes_mimic
+        - right_hip_mimic
+        - right_knee_mimic
+        - right_ankle_mimic
+        - right_toes_mimic
+
+    # -------------------------------------------------------------------------
+    # Control
+    # -------------------------------------------------------------------------
+    control_type: ${control_config.torque_control.control_type}
+    control_params: ${control_config.torque_control.control_params}
+
+    # -------------------------------------------------------------------------
+    # Reward
+    # -------------------------------------------------------------------------
+    reward_type: MimicReward
+    reward_params:
+      qpos_w_sum: 0.2 # 0.1
+      qvel_w_sum: 0.1
+      root_pos_w_sum: 0.1
+      root_vel_w_sum: 0.1
+      rpos_w_sum: 0.6
+      rquat_w_sum: 0.01
+      rvel_w_sum: 0.1
+      action_rate_coeff: 0.0
+      activation_energy_coeff: 0.0
+      # Per-joint additive torque penalty: weight * sum(qfrc_actuator^2) per joint.
+      # Targets the OSL prosthetic motors (49.4x / 58.4x gear) so they stop driving
+      # the model into the floor in early training. Other joints are unweighted.
+      joint_torque_weights:
+        OSL_KA_L1_osl_knee_angle_r: 1e-5
+        OSL_KA_L1_osl_ankle_angle_r: 1e-5
+      use_mean_exp_reward: false
+      sites_for_mimic:
+        - pelvis_mimic
+        - upper_body_mimic
+        - head_mimic
+        - left_shoulder_mimic
+        - left_elbow_mimic
+        - left_hand_mimic
+        - right_shoulder_mimic
+        - right_elbow_mimic
+        - right_hand_mimic
+        - left_hip_mimic
+        - left_knee_mimic
+        - left_ankle_mimic
+        - left_toes_mimic
+        - right_hip_mimic
+        - right_knee_mimic
+        - right_ankle_mimic
+        - right_toes_mimic
+
+    # -------------------------------------------------------------------------
+    # Termination — relax for early OSL learning if the policy never escapes
+    # the floor (e.g., raise mean_site_deviation_threshold to 1.5–2.0)
+    # -------------------------------------------------------------------------
+    terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
+    terminal_state_params:
+      mean_site_deviation_threshold: 1.0  # meters
+      root_deviation_threshold: 1.0       # meters
+      root_orientation_threshold: 1.0     # radians
+      enable_site_check: true
+
+    # -------------------------------------------------------------------------
+    # Random Start Disabling
+    # -------------------------------------------------------------------------
+    th_params:
+      random_start: true
+      # fixed_start_conf: [0, 0]
+      start_from_random_step: true
+
+  # ===========================================================================
+  # Algorithm
+  # ===========================================================================
+  algorithm: PPOJax
+
+  # ---------------------------------------------------------------------------
+  # Network architecture (GMR-tuned: 12x1024 + 3x2048 + 1x1024)
+  # ---------------------------------------------------------------------------
+  actor_hidden_layers: [1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 2048, 2048, 2048, 1024]
+  critic_hidden_layers: [1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 2048, 2048, 2048, 1024]
+  activation: silu
+
+  # ---------------------------------------------------------------------------
+  # Training schedule
+  # ---------------------------------------------------------------------------
+  lr: 4e-4
+  num_envs: ${experiment.env_params.num_envs}
+  total_timesteps: 1000000000 #2048000000
+  max_grad_norm: 1.0
+  anneal_lr: true
+  lr_schedule_type: "linear"
+  warmup_steps: null
+  min_lr_ratio: 0.1
+  weight_decay: 0
+  normalize_env: true
+  debug:
+    enabled: false
+    profile_traj_batch: false
+    profile_val_batch: false
+    track_nacon: false
+
+  # ---------------------------------------------------------------------------
+  # Optimizer
+  # ---------------------------------------------------------------------------
+  optimizer_type: "muon"
+  muon_config:
+    beta: 0.95
+    nesterov: true
+    ns_steps: 5
+    adaptive: false
+
+  # ---------------------------------------------------------------------------
+  # PPO hyperparameters
+  # ---------------------------------------------------------------------------
+  ppo_config:
+    num_steps: 80
+    update_epochs: 1
+    num_minibatches: 128
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_eps: 0.2
+    clip_eps_vf: 0.2
+    # Muscle dims start at 3.0 (matching conf_fullbody). Motor dims (OSL knee/ankle)
+    # use init_std_motors so a single Gaussian draw doesn't saturate the geared
+    # actuators in step 1. learnable_std=true lets the policy raise it later.
+    # _resolve_init_std (ppo.py) classifies the 2 motors by actuator_dyntype !=
+    # mjDYN_MUSCLE and assigns them init_std_motors; muscles keep init_std.
+    init_std: 3.0
+    init_std_motors: 3.0
+    learnable_std: true
+    ent_coef: 0.0
+    vf_coef: 0.5
+
+  # ---------------------------------------------------------------------------
+  # LayerNorm
+  # ---------------------------------------------------------------------------
+  use_layernorm: true
+  layernorm_eps: 1e-5
+
+  # ---------------------------------------------------------------------------
+  # MoE (disabled)
+  # ---------------------------------------------------------------------------
+  use_moe: false
+  moe_config:
+    num_experts: 16
+    moe_at_layers: [3]
+    apply_moe_to: "both"
+    apply_moe_to_output: false
+    expert_hidden_ratio: 0.5
+    temperature: 0.5
+    load_balance_loss_weight: 0.01
+    gate_init_std: 0.01
+
+  # ---------------------------------------------------------------------------
+  # Seeds and checkpointing
+  # ---------------------------------------------------------------------------
+  n_seeds: 1
+  seeds: null
+  vmap_across_seeds: false
+  save_checkpoints: true
+  max_checkpoints_to_keep: 10
+  checkpoints_on_validation: true
+  resume_from: null
+  async_checkpointing: false
+  reset_logging_timestep: false
+  reset_lr_schedule_on_resume: false
+
+  # ---------------------------------------------------------------------------
+  # Auto-resume (preemption robustness)
+  # ---------------------------------------------------------------------------
+  auto_resume: false
+  run_id: null
+  checkpoint_root: null
+
+  # ---------------------------------------------------------------------------
+  # Adaptive termination threshold curriculum (one-way ratchet, OFF by default)
+  # NOTE: starts TIGHTER than the static threshold above (0.5m vs 1.0m), so
+  # only enable once the policy can already walk under the static setting.
+  # ---------------------------------------------------------------------------
+  adaptive_termination:
+    enabled: false
+    init_threshold: 0.5     # Starting threshold (meters) - also max due to ratchet
+    low_band: 0.10          # <10%: decrease threshold (harder)
+    high_band: 0.20         # >20%: increase threshold (up to init)
+    adjust_factor: 0.95     # thr *= factor (decrease) or /= factor (increase)
+    consecutive_k: 5        # Require K consecutive updates on same side before adjusting
+    min_threshold: 0.1      # Minimum threshold (meters)
+    ema_alpha: 0.1          # EMA smoothing for rate estimation
+
+  # ---------------------------------------------------------------------------
+  # Reward curriculum — boosts qvel/root_vel weights once stable
+  # ---------------------------------------------------------------------------
+  reward_curriculum:
+    enabled: false
+    qvel_w_sum_init: 0.1
+    root_vel_w_sum_init: 0.1
+    qvel_w_sum_max: 0.4
+    root_vel_w_sum_max: 0.4
+    eta: 0.02
+    ema_alpha: 0.2
+    term_rate_threshold: 0.08
+    consecutive_k: 5
+
+  # ---------------------------------------------------------------------------
+  # Adaptive trajectory sampling — prioritize trajectories with high early-term rate
+  # ---------------------------------------------------------------------------
+  adaptive_sampling:
+    enabled: false
+    beta: 0.2
+    alpha: 1.0
+    floor_mix: 0.1
+    eps_div: 1e-6
+    eps_pow: 1e-6
+    ema_done_init: 10.0
+    ema_early_init: 5.0
+
+  # ===========================================================================
+  # Validation
+  # NOTE: validation set == training set (direct .npz). Swap to a held-out file
+  # for honest generalization metrics once initial training works.
+  # ===========================================================================
+  validation:
+    active: true
+    deterministic: true
+    num_steps: 522 # Must set to at least length of trajectory otherwise curves will zero
+    num_envs: 100
+    num: 100
+    video_length: 3000
+    video_frequency: 1
+    amass_dataset_conf:
+      dataset_group: null
+      trajectory_cache_type: "sparse"
+      traj_path:
+        - /home/dmma/src/00_AMBER/00_projbackflip/clipper/outputs/musclemimic/new_osl_fullbody/WalkingStraightForwards03_poses_crop0-521_z-0.025_ankle-7.npz
+    init_state_type: TrajInitialStateHandler
+    terminal_state_type: MeanRelativeSiteDeviationTerminalStateHandler
+    terminal_state_params:
+      mean_site_deviation_threshold: 0.5
+      enable_site_check: true
+    quantities:
+      - JointPosition
+      - JointVelocity
+      - RelSitePosition
+      - RelSiteVelocity
+      - RelSiteOrientation
+    measures:
+      - EuclideanDistance
+    rel_site_names:
+      - pelvis_mimic
+      - upper_body_mimic
+      - head_mimic
+      - left_shoulder_mimic
+      - left_elbow_mimic
+      - left_hand_mimic
+      - right_shoulder_mimic
+      - right_elbow_mimic
+      - right_hand_mimic
+      - left_hip_mimic
+      - left_knee_mimic
+      - left_ankle_mimic
+      - left_toes_mimic
+      - right_hip_mimic
+      - right_knee_mimic
+      - right_ankle_mimic
+      - right_toes_mimic
+  
+    # -------------------------------------------------------------------------
+    # Control
+    # -------------------------------------------------------------------------
+    th_params:
+      random_start: false
+      fixed_start_conf: [0, 0]
+      start_from_random_step: false
+
+# =============================================================================
+# Control configuration (referenced by experiment.env_params.control_*)
+# =============================================================================
+control_config:
+  torque_control:
+    control_type: DefaultControl
+    control_params: {}

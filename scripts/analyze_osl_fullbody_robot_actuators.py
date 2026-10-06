@@ -58,6 +58,7 @@ import argparse
 import copy
 import json
 import math
+import sys
 import warnings
 from pathlib import Path
 
@@ -66,8 +67,69 @@ import numpy as np
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ROBOT_XML = REPO_ROOT / "models" / "osl_fullbody" / "body" / "osl_fullbody_robot.xml"
-MUSCLE_XML = REPO_ROOT / "models" / "osl_fullbody" / "body" / "osl_fullbody.xml"
+
+# The model profiles live in the generator so the two scripts cannot disagree about
+# which source XML, finger list or servo coordinates belong to a model.
+# Imported as ``scripts.analyze_...`` by the tests and as a bare script from the
+# CLI; the relative form first keeps both paths sharing ONE generator module, so
+# there is never a second copy of MODELS to drift out of sync.
+try:  # pragma: no cover - trivial import plumbing
+    from . import generate_osl_fullbody_robot as _gen
+except ImportError:  # pragma: no cover
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import generate_osl_fullbody_robot as _gen
+
+DEFAULT_MODEL = _gen.DEFAULT_MODEL
+ROBOT_XML = _gen.MODELS[DEFAULT_MODEL].output_xml
+MUSCLE_XML = _gen.MODELS[DEFAULT_MODEL].source_xml
+
+
+def sizing_basis(profile: "_gen.ModelProfile") -> tuple[mujoco.MjModel, bool]:
+    """The model to measure ``I_eff`` on, and whether it is the real robot XML.
+
+    Prefers the generated robot model when it exists, which keeps an existing
+    model's numbers bit-for-bit what they were.  For a model whose robot XML has
+    not been generated yet -- the chicken-and-egg, since the table being derived
+    here is what the generator needs -- it falls back to the muscle model with the
+    finger joints deleted and actuation disabled.
+
+    That fallback is not an approximation.  Measured against the tracked
+    ``osl_fullbody_robot.xml``, probing the muscle model *as-is* is up to **35%**
+    low at ``deviation_*`` / ``flexion_*``; deleting the 40 finger joints first
+    brings it to **4.16e-10**.  The gap was never the muscles -- they and their
+    tendons contribute no inertia -- it was the free hand DoFs absorbing the
+    acceleration that a welded hand does not.  ``test_new_osl_fullbody_robot.py``
+    pins that equivalence so this shortcut cannot silently rot.
+    """
+    if profile.output_xml.exists():
+        return mujoco.MjModel.from_xml_path(str(profile.output_xml)), True
+
+    spec = mujoco.MjSpec.from_file(str(profile.source_xml.resolve()))
+    _gen._strip_keyframes(spec)
+    _gen._delete_finger_joints(spec, profile.finger_joints)
+    model = spec.compile()
+    # servo_free_copy handles contacts, but this model still carries its muscles.
+    model.opt.disableflags |= mujoco.mjtDisableBit.mjDSBL_ACTUATION
+    return model, False
+
+
+def servo_coordinates(
+    model: mujoco.MjModel, profile: "_gen.ModelProfile", has_servos: bool
+) -> list[tuple[int, str, int, int]]:
+    """``servo_actuators`` when the robot exists; else synthesized from the profile.
+
+    The actuator id is ``-1`` in the synthesized case -- nothing downstream of the
+    sizing path uses it, and the CURRENT-XML report that does is skipped.
+    """
+    if has_servos:
+        return servo_actuators(model)
+    out = []
+    for name, *_ in profile.position_servos:
+        joint = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        if joint < 0:
+            raise RuntimeError(f"servo coordinate absent from {profile.source_xml.name}: {name}")
+        out.append((-1, name, joint, model.jnt_dofadr[joint]))
+    return out
 
 
 def servo_actuators(model: mujoco.MjModel) -> list[tuple[int, str, int, int]]:
@@ -289,7 +351,8 @@ def background_poses(robot: mujoco.MjModel, servos: list[tuple[int, str, int, in
 
 
 def muscle_moment_capacity(robot: mujoco.MjModel, servos: list[tuple[int, str, int, int]],
-                           steps: int = 41) -> dict[str, tuple[float, float, float, str]]:
+                           steps: int = 41,
+                           muscle_xml: Path = None) -> dict[str, tuple[float, float, float, str]]:
     """Peak moment the muscle sibling model can produce about each coordinate.
 
     MuJoCo muscle force is ``gain(length, velocity) * act`` -- linear in
@@ -316,7 +379,7 @@ def muscle_moment_capacity(robot: mujoco.MjModel, servos: list[tuple[int, str, i
     isometric ceilings: ``qvel = 0``, so the force-velocity factor sits at its
     optimum.
     """
-    muscle = mujoco.MjSpec.from_file(str(MUSCLE_XML.resolve())).compile()
+    muscle = mujoco.MjSpec.from_file(str((muscle_xml or MUSCLE_XML).resolve())).compile()
     data = mujoco.MjData(muscle)
     is_muscle = np.array(
         [muscle.actuator_dyntype[a] == mujoco.mjtDyn.mjDYN_MUSCLE for a in range(muscle.nu)]
@@ -366,6 +429,33 @@ def muscle_moment_capacity(robot: mujoco.MjModel, servos: list[tuple[int, str, i
     return capacity
 
 
+def _report_current(robot, servos, inertia, inertia_min, capacity, dt) -> None:
+    """The CURRENT-XML table: what the tracked robot model's gains actually imply.
+
+    Only reachable when a robot XML exists -- it reads ``gainprm``/``biasprm`` off
+    real servos.  A model being sized for the first time has none.
+    """
+    for index, (actuator, name, joint, dof) in enumerate(servos):
+        lo, hi = robot.jnt_range[joint]
+        kp = -robot.actuator_biasprm[actuator, 1]
+        kd = -robot.actuator_biasprm[actuator, 2]
+        gain = robot.actuator_gainprm[actuator, 0]
+        bias = robot.actuator_biasprm[actuator, 0]
+        low_target, high_target = (bias - gain) / kp, (bias + gain) / kp
+        span = max(high_target - low_target, 1e-9)
+        in_range = max(0.0, min(high_target, hi) - max(low_target, lo)) / span
+        omega = math.sqrt(kp / inertia[index])
+        zeta = kd / (2 * math.sqrt(kp * inertia[index]))
+        stability = kd * dt / inertia_min[index]
+        flag = ("  <== UNSTABLE" if stability >= 2.0
+                else "  <== marginal" if stability >= 1.0 else "")
+        print(f"{name:22s} {math.degrees(low_target):7.1f} {math.degrees(high_target):7.1f} "
+              f"{math.degrees(lo):7.1f} {math.degrees(hi):7.1f} {in_range * 100:6.0f}% "
+              f"{inertia[index]:7.4f} {kp:7.1f} {kd:6.1f} {omega:6.1f} {zeta:6.2f} "
+              f"{stability:8.2f} {robot.actuator_forcerange[actuator, 1]:6.0f} "
+              f"{capacity[name][0]:7.0f}{flag}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -383,10 +473,13 @@ def main() -> int:
                         help="target closed-loop damping ratio for the proposed Kd")
     parser.add_argument("--json-out", type=Path, default=None,
                         help="write the proposed table to this path")
+    parser.add_argument("--model", choices=sorted(_gen.MODELS), default=DEFAULT_MODEL,
+                        help="which robot model to size (default: %(default)s)")
     args = parser.parse_args()
 
-    robot = mujoco.MjModel.from_xml_path(str(ROBOT_XML))
-    servos = servo_actuators(robot)
+    profile = _gen._resolve(args.model)
+    robot, has_servos = sizing_basis(profile)
+    servos = servo_coordinates(robot, profile, has_servos)
     dofs = [dof for _, _, _, dof in servos]
     dt = robot.opt.timestep
 
@@ -394,7 +487,7 @@ def main() -> int:
     # ranges, so nothing here depends on a motion clip.
     reference = project_joint_equalities(robot, robot.qpos0)
     inertia = constrained_inertia(robot, reference, dofs)
-    capacity = muscle_moment_capacity(robot, servos)
+    capacity = muscle_moment_capacity(robot, servos, muscle_xml=profile.source_xml)
 
     # Diagnostics only.
     load = np.zeros(len(servos))
@@ -419,8 +512,12 @@ def main() -> int:
             approximate = len(caught)
         inertia_min = np.nanmin(np.array(per_frame), axis=0)
 
-    print(f"model {ROBOT_XML.relative_to(REPO_ROOT)}  dt={dt}  "
+    basis = profile.output_xml if has_servos else profile.source_xml
+    print(f"model {basis.relative_to(REPO_ROOT)}  dt={dt}  "
           f"integrator={mujoco.mjtIntegrator(robot.opt.integrator).name}")
+    if not has_servos:
+        print("basis:        robot XML absent -- fingerless muscle model "
+              "(equivalent to 4.16e-10; see sizing_basis)")
     print("sizing poses: equality-reconciled qpos0 + all-midrange, each swept per joint")
     print(f"diagnostics:  {args.trajectory.name if args.trajectory else '(none)'}")
     if args.trajectory is not None and approximate:
@@ -431,28 +528,13 @@ def main() -> int:
     header = (f"{'joint':22s} {'u=-1':>7s} {'u=+1':>7s} {'lo':>7s} {'hi':>7s} {'in-rng':>7s} "
               f"{'I_eq':>7s} {'Kp':>7s} {'Kd':>6s} {'wn':>6s} {'zeta':>6s} {'Kd*dt/I':>8s} "
               f"{'flim':>6s} {'muscle':>7s}")
-    print("CURRENT XML")
-    print(header)
-    print("-" * len(header))
-    for index, (actuator, name, joint, dof) in enumerate(servos):
-        lo, hi = robot.jnt_range[joint]
-        kp = -robot.actuator_biasprm[actuator, 1]
-        kd = -robot.actuator_biasprm[actuator, 2]
-        gain = robot.actuator_gainprm[actuator, 0]
-        bias = robot.actuator_biasprm[actuator, 0]
-        low_target, high_target = (bias - gain) / kp, (bias + gain) / kp
-        span = max(high_target - low_target, 1e-9)
-        in_range = max(0.0, min(high_target, hi) - max(low_target, lo)) / span
-        omega = math.sqrt(kp / inertia[index])
-        zeta = kd / (2 * math.sqrt(kp * inertia[index]))
-        stability = kd * dt / inertia_min[index]
-        flag = ("  <== UNSTABLE" if stability >= 2.0
-                else "  <== marginal" if stability >= 1.0 else "")
-        print(f"{name:22s} {math.degrees(low_target):7.1f} {math.degrees(high_target):7.1f} "
-              f"{math.degrees(lo):7.1f} {math.degrees(hi):7.1f} {in_range * 100:6.0f}% "
-              f"{inertia[index]:7.4f} {kp:7.1f} {kd:6.1f} {omega:6.1f} {zeta:6.2f} "
-              f"{stability:8.2f} {robot.actuator_forcerange[actuator, 1]:6.0f} "
-              f"{capacity[name][0]:7.0f}{flag}")
+    if not has_servos:
+        print("CURRENT XML: (none -- this model has no robot XML yet)")
+    else:
+        print("CURRENT XML")
+        print(header)
+        print("-" * len(header))
+        _report_current(robot, servos, inertia, inertia_min, capacity, dt)
 
     print(f"\nPROPOSED (forcerange from muscle capacity, Kp = flim/{args.saturation_error} "
           f"capped at wn={args.max_bandwidth}, Kd from zeta={args.damping_ratio})")

@@ -27,7 +27,13 @@ def parse_arguments():
     # Model configuration
     parser.add_argument(
         "--model",
-        choices=["MyoBimanualArm", "MyoFullBody", "MyoLeg80_OSL_KA", "OSLFullBody"],
+        choices=[
+            "MyoBimanualArm",
+            "MyoFullBody",
+            "MyoLeg80_OSL_KA",
+            "OSLFullBody",
+            "NewOSLFullBody",
+        ],
         default="MyoFullBody",
         help="Model type to use",
     )
@@ -291,11 +297,12 @@ def main():
     if args.model == "MyoBimanualArm":
         env_params["goal_type"] = "GoalBimanualTrajMimicv2"
         env_params["goal_params"] = goal_params
-    elif args.model in ("MyoFullBody", "MyoLeg80_OSL_KA", "OSLFullBody"):
-        # MyoLeg80_OSL_KA and OSLFullBody subclass MyoFullBody and use the same goal type.
-        # Note "OSLFullBody" contains neither "MyoFullBody" nor "MyoLeg" as a substring, so
-        # it has to be listed explicitly -- the same naming pitfall as the site-mapper and
-        # validation-video-recorder branches.
+    elif args.model in ("MyoFullBody", "MyoLeg80_OSL_KA", "OSLFullBody", "NewOSLFullBody"):
+        # MyoLeg80_OSL_KA, OSLFullBody and NewOSLFullBody subclass MyoFullBody and use the
+        # same goal type.  Note "OSLFullBody" contains neither "MyoFullBody" nor "MyoLeg" as
+        # a substring, so it has to be listed explicitly -- the same naming pitfall as the
+        # site-mapper and validation-video-recorder branches.  (Those two dispatch on
+        # substrings, so "NewOSLFullBody" reaches them for free; this one does not.)
         env_params["goal_type"] = "GoalTrajMimicv2"
         env_params["goal_params"] = goal_params
 

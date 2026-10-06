@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
+import mujoco
+import numpy as np
 from omegaconf import ListConfig, open_dict
+
+from loco_mujoco.core.control_functions.default import DefaultControl
 
 from musclemimic.algorithms import ActorCritic, JaxRLAlgorithmBase
 from musclemimic.algorithms.common.moe_networks import SoftMoEActorCritic
@@ -128,6 +132,17 @@ class PPOJax(JaxRLAlgorithmBase):
         # and the scalar init_std elsewhere.
         action_dim = env.info.action_space.shape[0]
         init_std_resolved = cls._resolve_init_std(env, exp, action_dim)
+        actor_bias_init = cls._resolve_actor_bias_init(env, exp, action_dim)
+        if actor_bias_init is not None:
+            msg = (
+                f"[ppo] fresh actor initialization: {np.count_nonzero(actor_bias_init)}/{action_dim} "
+                f"biased dimensions, max magnitude={np.max(np.abs(actor_bias_init)):.3f}; "
+                "restored parameters take precedence"
+            )
+            if logger.isEnabledFor(logging.INFO) and (logger.handlers or logging.getLogger().handlers):
+                logger.info(msg)
+            else:
+                print(msg)
 
         # observation indices for actor/critic
         if hasattr(exp, "actor_obs_group") and exp.actor_obs_group is not None:
@@ -159,6 +174,7 @@ class PPOJax(JaxRLAlgorithmBase):
                 action_dim=action_dim,
                 activation=exp.activation,
                 init_std=init_std_resolved,
+                actor_bias_init=actor_bias_init,
                 learnable_std=exp.learnable_std,
                 hidden_layer_dims=actor_hidden,  # moe uses same for both
                 actor_obs_ind=actor_obs_ind,
@@ -166,6 +182,7 @@ class PPOJax(JaxRLAlgorithmBase):
                 num_experts=moe_config.get("num_experts", 8),
                 moe_at_layers=moe_config.get("moe_at_layers", (1,)),
                 apply_moe_to=moe_config.get("apply_moe_to", "both"),
+                apply_moe_to_output=moe_config.get("apply_moe_to_output", False),
                 temperature=moe_config.get("temperature", 1.0),
                 load_balance_loss_weight=moe_config.get("load_balance_loss_weight", 0.01),
                 use_layernorm=use_layernorm,
@@ -176,6 +193,7 @@ class PPOJax(JaxRLAlgorithmBase):
                 action_dim,
                 activation=exp.activation,
                 init_std=init_std_resolved,
+                actor_bias_init=actor_bias_init,
                 learnable_std=exp.learnable_std,
                 hidden_layer_dims=actor_hidden,
                 critic_hidden_layer_dims=critic_hidden if critic_hidden != actor_hidden else None,
@@ -196,6 +214,78 @@ class PPOJax(JaxRLAlgorithmBase):
         return ast.literal_eval(layers)
 
     @classmethod
+    def _unwrap_env(cls, env: Any):
+        """Support both property and method forms of the wrapper API."""
+        unwrap = getattr(env, "unwrapped", None)
+        return env if unwrap is None else unwrap() if callable(unwrap) else unwrap
+
+    @classmethod
+    def _resolve_actor_bias_init(cls, env: Any, exp: Any, action_dim: int):
+        """Neutral qpos0 commands for eligible direct position servos, in policy order.
+
+        Unsupported dimensions keep zero bias. This is only a fresh parameter
+        initializer; checkpoint restoration remains authoritative.
+        """
+        mode = exp.get("actor_bias_init", "none")
+        if mode is None or mode is False or mode == "none":
+            return None
+        if mode != "qpos0":
+            raise ValueError(f"Unknown actor_bias_init {mode!r}; use 'qpos0' or 'none'")
+        base_env = cls._unwrap_env(env)
+        model = getattr(base_env, "_model", None)
+        indices = getattr(base_env, "_action_indices", None)
+        control = getattr(base_env, "_control_func", None)
+        if (
+            type(control) is not DefaultControl
+            or control._apply_mode != "direct"
+            or model is None
+            or indices is None
+        ):
+            return None
+        indices = np.asarray(indices)
+        mean = np.asarray(control.norm_act_mean)
+        delta = np.asarray(control.norm_act_delta)
+        if (
+            indices.shape != (action_dim,)
+            or mean.shape != (action_dim,)
+            or delta.shape != (action_dim,)
+            or not np.issubdtype(indices.dtype, np.integer)
+        ):
+            return None
+        bias = np.zeros(action_dim)
+        for i, a in enumerate(indices):
+            if a < 0 or a >= model.nu:
+                continue
+            if (
+                model.actuator_trntype[a] != mujoco.mjtTrn.mjTRN_JOINT
+                or model.actuator_gaintype[a] != mujoco.mjtGain.mjGAIN_FIXED
+                or model.actuator_biastype[a] != mujoco.mjtBias.mjBIAS_AFFINE
+                or model.actuator_dyntype[a] != mujoco.mjtDyn.mjDYN_NONE
+            ):
+                continue
+            joint = model.actuator_trnid[a, 0]
+            if (
+                joint < 0
+                or joint >= model.njnt
+                or model.jnt_type[joint] not in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE)
+            ):
+                continue
+            kp = -model.actuator_biasprm[a, 1]
+            offset = model.actuator_biasprm[a, 0]
+            gain = model.actuator_gainprm[a, 0]
+            gear = model.actuator_gear[a, 0]
+            q0 = model.qpos0[model.jnt_qposadr[joint]]
+            coefficients = [kp, offset, model.actuator_biasprm[a, 2], gain, gear, q0, mean[i], delta[i]]
+            if not np.all(np.isfinite(coefficients)) or kp <= 0 or gain == 0 or gear == 0 or delta[i] <= 0:
+                continue
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                ctrl0 = (kp * gear * q0 - offset) / gain
+                normalized = (ctrl0 - mean[i]) / delta[i]
+            if np.isfinite(normalized):
+                bias[i] = np.clip(normalized, -0.95, 0.95)
+        return bias.tolist() if np.any(bias) else None
+
+    @classmethod
     def _resolve_init_std(cls, env: Any, exp: Any, action_dim: int):
         """Build the actor-critic init_std as scalar or per-dim list.
 
@@ -210,10 +300,7 @@ class PPOJax(JaxRLAlgorithmBase):
             return init_std_scalar
 
         # Need raw mujoco model + action indices, which live on the unwrapped env.
-        base_env = env
-        unwrap = getattr(env, "unwrapped", None)
-        if unwrap is not None:
-            base_env = unwrap() if callable(unwrap) else unwrap
+        base_env = cls._unwrap_env(env)
         model = getattr(base_env, "_model", None)
         action_indices = getattr(base_env, "_action_indices", None)
         if model is None or action_indices is None:

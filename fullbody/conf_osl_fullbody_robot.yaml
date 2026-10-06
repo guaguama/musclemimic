@@ -17,6 +17,13 @@ experiment:
     enable_muscle_excitation_observations: false
     enable_muscle_activation_observations: false
 
+  # actor_bias_init is opt-in -- the code default is "none", so it applies only
+  # where set explicitly, as it is here. Fresh actors then start commanding the
+  # model's qpos0 instead of the joint-range midpoint that zero action encodes;
+  # capped at +/-0.95, so Gaussian samples can still clip. Restored checkpoint
+  # parameters override initialization. Disable with:
+  # experiment.ppo_config.actor_bias_init=none
   ppo_config:
     init_std: 0.2
     init_std_motors: 0.2
+    actor_bias_init: qpos0  # enabled; change to none to disable

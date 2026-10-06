@@ -78,6 +78,9 @@ from pathlib import Path
 
 import mujoco
 
+import dataclasses
+from dataclasses import dataclass
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_XML = REPO_ROOT / "models" / "osl_fullbody" / "body" / "osl_fullbody.xml"
@@ -178,12 +181,177 @@ OSL_MOTORS = (
 )
 
 
-def _delete_finger_joints(spec: mujoco.MjSpec) -> None:
+# ---------------------------------------------------------------------------
+# Model profiles
+# ---------------------------------------------------------------------------
+# Everything above is the ``osl_fullbody`` profile, kept as module-level names so
+# that existing importers (tests read ``OUTPUT_XML``, ``POSITION_SERVOS`` and
+# ``OSL_MOTORS``) and bare ``--check`` invocations behave exactly as before.  A
+# second model adds a profile rather than editing those.
+
+# Verbatim output of
+#   scripts/analyze_osl_fullbody_robot_actuators.py --model new_osl_fullbody
+# (recorded in scripts/new_osl_fullbody_robot_actuator_candidate.json).  Derived by
+# the same three rules as the table above -- regenerate rather than hand-editing.
+#
+# Only 2 of the 27 coordinates were renamed upstream (elbow_flex -> elbow_flexion),
+# but the NUMBERS are re-derived rather than copied: the official export carries
+# noticeably more musculature on the amputated side, so hip_flexion_r nearly doubles
+# (285 -> 560 N*m) and hip_adduction_r goes 235 -> 405.
+_NEW_POSITION_SERVOS = (
+    # Torso.
+    ("flex_extension",          871.4,  68.91,  305.0),
+    ("lat_bending",            1228.6,  90.69,  430.0),
+    ("axial_rotation",          771.4,  30.36,  270.0),
+    # Right arm.
+    ("elv_angle_r",             442.9,  38.70,  155.0),           # 0 N*m at qpos0 alone (gimbal singularity)
+    ("shoulder_elv_r",          314.3,  37.50,  110.0),
+    ("shoulder_rot_r",          109.8,   1.46,   90.0),           # Kp bandwidth-capped at wn=150
+    ("elbow_flexion_r",         242.9,   5.35,   85.0),
+    ("pro_sup_r",                42.9,   0.61,   15.0),
+    ("deviation_r",              58.0,   0.77,   35.0),           # Kp bandwidth-capped at wn=150
+    ("flexion_r",                70.6,   0.94,   40.0),           # Kp bandwidth-capped at wn=150
+    # Left arm -- identical to the right: both sizing poses are bilaterally
+    # symmetric, so every pair falls out equal with no manual symmetrization.
+    ("elv_angle_l",             442.9,  38.70,  155.0),           # 0 N*m at qpos0 alone (gimbal singularity)
+    ("shoulder_elv_l",          314.3,  37.50,  110.0),
+    ("shoulder_rot_l",          109.8,   1.46,   90.0),           # Kp bandwidth-capped at wn=150
+    ("elbow_flexion_l",         242.9,   5.35,   85.0),
+    ("pro_sup_l",                42.9,   0.61,   15.0),
+    ("deviation_l",              58.0,   0.77,   35.0),           # Kp bandwidth-capped at wn=150
+    ("flexion_l",                70.6,   0.94,   40.0),           # Kp bandwidth-capped at wn=150
+    # Residual right hip.  Unlike the hand-assembled model, the official export keeps
+    # enough hip musculature that flexion matches the intact side (560 vs the old
+    # 285 N*m) -- so these are NOT symmetrized, they simply came out near-equal.
+    ("hip_flexion_r",          1600.0,  32.09,  560.0),
+    ("hip_adduction_r",        1157.1,  39.21,  405.0),
+    ("hip_rotation_r",          485.7,   8.63,  170.0),
+    # Intact left leg.
+    ("hip_flexion_l",          1600.0,  34.33,  560.0),
+    ("hip_adduction_l",        1200.0,  40.97,  420.0),
+    ("hip_rotation_l",          528.6,   9.21,  185.0),
+    ("knee_angle_l",           1557.1,  26.99,  545.0),
+    ("ankle_angle_l",           340.5,   4.54,  425.0),           # Kp bandwidth-capped at wn=150
+    ("subtalar_angle_l",        303.3,   4.04,  135.0),           # Kp bandwidth-capped at wn=150
+    ("mtp_angle_l",              14.3,   0.76,    5.0),           # MyoLeg's toe flexors are weak; below human MVC
+)
+
+# Joint names gained the ``OSL_KA_L1_`` namespace upstream; the ACTUATOR names did
+# not.  ``gear`` here reproduces the source's ``gainprm`` scaling exactly -- force
+# is ``gear * gainprm[0] * ctrl`` either way, so peak torque stays 142.27 / 168.19
+# N*m at the unchanged +-2.88 ctrlrange.
+_NEW_OSL_MOTORS = tuple(
+    (name, f"OSL_KA_L1_{joint}", gear) for name, joint, gear in OSL_MOTORS
+)
+
+# The official export dropped the ``_r`` suffix on four right-hand joints, so the
+# list above reaches only 36 of 40 against it.  The corrected list already exists
+# for the environment; importing it keeps the two in lockstep by construction.
+def _new_finger_joints() -> tuple[str, ...]:
+    from musclemimic.environments.humanoids.new_osl_fullbody import _FINGER_JOINTS
+
+    return tuple(_FINGER_JOINTS)
+
+
+@dataclass(frozen=True)
+class ModelProfile:
+    """Everything that differs between the models this script can emit."""
+
+    source_xml: Path
+    output_xml: Path
+    model_name: str
+    finger_joints: tuple[str, ...]
+    position_servos: tuple[tuple[str, float, float, float], ...]
+    osl_motors: tuple[tuple[str, str, float], ...]
+    dimensions: tuple[int, ...]  # (nq, nv, njnt, nbody, neq, nu, na)
+
+    @property
+    def asset_root(self) -> Path:
+        return self.source_xml.parents[1]
+
+
+DEFAULT_MODEL = "osl_fullbody"
+_NEW_BODY = REPO_ROOT / "models" / "new_osl_fullbody" / "body"
+
+MODELS: dict[str, ModelProfile] = {
+    "osl_fullbody": ModelProfile(
+        source_xml=SOURCE_XML,
+        output_xml=OUTPUT_XML,
+        model_name="OSLFullBodyRobot",
+        finger_joints=FINGER_JOINTS,
+        position_servos=POSITION_SERVOS,
+        osl_motors=OSL_MOTORS,
+        dimensions=(84, 83, 78, 104, 44, 29, 0),
+    ),
+    # Both official variants share ONE servo table: the analysis is run once, on
+    # the rigid model.  That is safe rather than exact -- the compliant socket
+    # lowers effective inertia at the right hip by up to 50% (hip_adduction_r
+    # 0.3322 -> 0.1646), so the shared Kd lands at zeta ~ 1.42 there instead of 1.
+    # Overdamped, not unstable: measured worst Kd*dt/I is 0.600 on BOTH variants
+    # (ankle_angle_l) at the 2 ms training timestep, against an Euler bound of 2.0.
+    "new_osl_fullbody": ModelProfile(
+        source_xml=_NEW_BODY / "new_osl_fullbody.xml",
+        output_xml=_NEW_BODY / "new_osl_fullbody_robot.xml",
+        model_name="NewOSLFullBodyRobot",
+        finger_joints=(),  # filled lazily -- see _resolve
+        position_servos=_NEW_POSITION_SERVOS,
+        osl_motors=_NEW_OSL_MOTORS,
+        dimensions=(80, 79, 74, 106, 44, 29, 0),
+    ),
+    "new_osl_fullbody_compliant_socket": ModelProfile(
+        source_xml=_NEW_BODY / "new_osl_fullbody_compliant_socket.xml",
+        output_xml=_NEW_BODY / "new_osl_fullbody_robot_compliant_socket.xml",
+        model_name="NewOSLFullBodyRobot",
+        finger_joints=(),
+        position_servos=_NEW_POSITION_SERVOS,
+        osl_motors=_NEW_OSL_MOTORS,
+        dimensions=(84, 83, 78, 106, 44, 29, 0),
+    ),
+}
+
+
+def _resolve(name: str) -> ModelProfile:
+    """The profile for ``name``, with the new models' finger list filled in."""
+    profile = MODELS[name]
+    if not profile.finger_joints:
+        profile = dataclasses.replace(profile, finger_joints=_new_finger_joints())
+    return profile
+
+
+def _strip_keyframes(spec: mujoco.MjSpec) -> None:
+    """Drop every keyframe, which deleting a joint otherwise invalidates.
+
+    A spec carrying explicit ``<key qpos=...>`` fails to compile once a joint goes:
+    ``keyframe 'stand': invalid qpos size, expected 119, got 120``.  The official
+    export ships five (``stand``, ``walk_*``, ``squat``, ``lunge``); the
+    hand-assembled model has none, so this is a no-op there.
+
+    ``spec.nkey = 0`` is the non-obvious half: ``<size nkey="5"/>`` allocates the
+    slots independently of the ``<keyframe>`` entries, so without it the model
+    keeps five all-zero keys -- and an all-zero qpos carries a zero root quaternion.
+
+    Guarded on there actually being keyframes, because the two halves are not
+    symmetric: the hand-assembled model declares ``<size nkey="1"/>`` (via
+    ``leg/assets/myolegs_assets.xml``) with no ``<keyframe>`` at all, and clearing
+    ``nkey`` unconditionally would drop that from its output and break byte-identical
+    regeneration.
+    """
+    keys = list(spec.keys)
+    if not keys:
+        return
+    for key in keys:
+        spec.delete(key)
+    spec.nkey = 0
+
+
+def _delete_finger_joints(
+    spec: mujoco.MjSpec, finger_joints: tuple[str, ...] = FINGER_JOINTS
+) -> None:
     joints = {joint.name: joint for joint in spec.joints}
-    missing = set(FINGER_JOINTS) - joints.keys()
+    missing = set(finger_joints) - joints.keys()
     if missing:
         raise RuntimeError(f"source model is missing finger joints: {sorted(missing)}")
-    for name in FINGER_JOINTS:
+    for name in finger_joints:
         spec.delete(joints[name])
 
 
@@ -254,23 +422,53 @@ def _add_osl_motor(spec: mujoco.MjSpec, name: str, joint_name: str, gear: float)
     actuator.ctrlrange = (-2.88, 2.88)
 
 
-def build_spec() -> mujoco.MjSpec:
+def _rebase_assets(spec: mujoco.MjSpec, profile: "ModelProfile") -> None:
+    """Point both asset dirs at the model root and rewrite mesh paths to match.
+
+    The generated file lives in ``body/`` while ``_make_asset_paths_relative``
+    writes filenames relative to the MODEL ROOT, so ``meshdir``/``texturedir`` have
+    to be ``..``.  The two sources disagree about how they get there:
+
+    * hand-assembled -- ``meshdir=".." texturedir=".."`` already, with filenames
+      like ``meshes/sacrum.stl``.  Everything below is an identity here, which is
+      what keeps that model's regeneration byte-identical.
+    * official export -- ``meshdir="../meshes"`` and no ``texturedir``, with bare
+      basenames like ``sacrum.stl``.  Repointing ``meshdir`` alone would resolve
+      those to ``body/../sacrum.stl``; leaving it alone would resolve the skybox
+      (which arrives absolute, via the scene include) to ``body/scene/...``.  So
+      the subdirectory has to move out of ``meshdir`` and into each filename.
+    """
+    asset_root = profile.asset_root.resolve()
+    mesh_root = (profile.source_xml.parent / (spec.meshdir or ".")).resolve()
+    prefix = mesh_root.relative_to(asset_root)
+    if prefix != Path("."):
+        for mesh in spec.meshes:
+            if mesh.file and not os.path.isabs(mesh.file):
+                mesh.file = (prefix / mesh.file).as_posix()
+    spec.meshdir = ".."
+    spec.texturedir = ".."
+
+
+def build_spec(profile: ModelProfile = None) -> mujoco.MjSpec:
     """Build the robot spec before standalone XML serialization."""
-    spec = mujoco.MjSpec.from_file(str(SOURCE_XML.resolve()))
-    spec.modelname = "OSLFullBodyRobot"
-    _delete_finger_joints(spec)
+    profile = profile if profile is not None else _resolve(DEFAULT_MODEL)
+    spec = mujoco.MjSpec.from_file(str(profile.source_xml.resolve()))
+    spec.modelname = profile.model_name
+    _rebase_assets(spec, profile)
+    _strip_keyframes(spec)
+    _delete_finger_joints(spec, profile.finger_joints)
     _remove_actuation_and_muscle_tendons(spec)
-    for servo in POSITION_SERVOS:
+    for servo in profile.position_servos:
         _add_position_servo(spec, *servo)
-    for motor in OSL_MOTORS:
+    for motor in profile.osl_motors:
         _add_osl_motor(spec, *motor)
     return spec
 
 
-def _make_asset_paths_relative(xml: str) -> str:
+def _make_asset_paths_relative(xml: str, asset_root: Path = None) -> str:
     """Rewrite resolved asset filenames for a file stored in ``body/``."""
     root = ET.fromstring(xml)
-    asset_root = ASSET_ROOT.resolve()
+    asset_root = (asset_root if asset_root is not None else ASSET_ROOT).resolve()
     for element in root.iter():
         filename = element.get("file")
         if not filename or not os.path.isabs(filename):
@@ -293,9 +491,10 @@ def _make_asset_paths_relative(xml: str) -> str:
     return xml
 
 
-def generate_xml() -> str:
-    spec = build_spec()
-    xml = _make_asset_paths_relative(spec.to_xml())
+def generate_xml(profile: ModelProfile = None) -> str:
+    profile = profile if profile is not None else _resolve(DEFAULT_MODEL)
+    spec = build_spec(profile)
+    xml = _make_asset_paths_relative(spec.to_xml(), profile.asset_root)
     marker = f'<mujoco model="{spec.modelname}">'
     generated_notice = (
         "\n  <!-- Generated by scripts/generate_osl_fullbody_robot.py; "
@@ -314,11 +513,13 @@ def generate_xml() -> str:
     return xml
 
 
-def _compile_generated(xml: str) -> mujoco.MjModel:
+def _compile_generated(xml: str, profile: ModelProfile = None) -> mujoco.MjModel:
     # from_xml_string needs an asset dictionary for relative external assets;
     # compilation from the final path validates the same resolution users get.
-    OUTPUT_XML.parent.mkdir(parents=True, exist_ok=True)
-    temporary = OUTPUT_XML.with_suffix(".xml.tmp")
+    profile = profile if profile is not None else _resolve(DEFAULT_MODEL)
+    output = profile.output_xml
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(".xml.tmp")
     temporary.write_text(xml, encoding="utf-8")
     try:
         return mujoco.MjModel.from_xml_path(str(temporary))
@@ -333,24 +534,33 @@ def main() -> int:
         action="store_true",
         help="fail if the tracked XML differs from deterministic regeneration",
     )
+    parser.add_argument(
+        "--model",
+        choices=sorted(MODELS),
+        default=DEFAULT_MODEL,
+        help="which robot model to generate (default: %(default)s)",
+    )
     args = parser.parse_args()
 
-    xml = generate_xml()
-    model = _compile_generated(xml)
-    expected = (84, 83, 78, 104, 44, 29, 0)
+    profile = _resolve(args.model)
+    output = profile.output_xml
+    xml = generate_xml(profile)
+    model = _compile_generated(xml, profile)
     actual = (model.nq, model.nv, model.njnt, model.nbody, model.neq, model.nu, model.na)
-    if actual != expected:
-        raise RuntimeError(f"unexpected model dimensions: {actual}, expected {expected}")
+    if actual != profile.dimensions:
+        raise RuntimeError(
+            f"unexpected model dimensions: {actual}, expected {profile.dimensions}"
+        )
 
     if args.check:
-        if not OUTPUT_XML.exists() or OUTPUT_XML.read_text(encoding="utf-8") != xml:
-            print(f"{OUTPUT_XML.relative_to(REPO_ROOT)} is out of date", file=sys.stderr)
+        if not output.exists() or output.read_text(encoding="utf-8") != xml:
+            print(f"{output.relative_to(REPO_ROOT)} is out of date", file=sys.stderr)
             return 1
-        print(f"{OUTPUT_XML.relative_to(REPO_ROOT)} is up to date")
+        print(f"{output.relative_to(REPO_ROOT)} is up to date")
         return 0
 
-    OUTPUT_XML.write_text(xml, encoding="utf-8")
-    print(f"wrote {OUTPUT_XML.relative_to(REPO_ROOT)}")
+    output.write_text(xml, encoding="utf-8")
+    print(f"wrote {output.relative_to(REPO_ROOT)}")
     return 0
 
 

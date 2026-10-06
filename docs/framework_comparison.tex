@@ -1,0 +1,1228 @@
+% =====================================================================
+%  Comparison of MuscleMimic, mjlab, and Qflex
+%  Compile with:  pdflatex framework_comparison.tex   (run twice for refs)
+%  Uses only standard CTAN packages; no shell-escape required.
+% =====================================================================
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{ragged2e}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage[hidelinks]{hyperref}
+
+% ---------- colours ----------
+\definecolor{mmC}{HTML}{AE332B}   % MuscleMimic
+\definecolor{mjC}{HTML}{1B6B77}   % mjlab
+\definecolor{qfC}{HTML}{8A6524}   % Qflex
+\definecolor{rulegrey}{HTML}{888888}
+\definecolor{codebg}{HTML}{F5F5F5}
+
+% ---------- listings ----------
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{rulegrey},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  xleftmargin=0pt,
+  framexleftmargin=3pt,
+}
+
+% ---------- helpers ----------
+\newcommand{\MM}{\textcolor{mmC}{\textbf{MuscleMimic}}}
+\newcommand{\MJ}{\textcolor{mjC}{\textbf{mjlab}}}
+\newcommand{\QF}{\textcolor{qfC}{\textbf{Qflex}}}
+\newcommand{\yes}{\textbf{yes}}
+\newcommand{\no}{no}
+\newcommand{\na}{\textemdash}
+\newcolumntype{L}[1]{>{\RaggedRight\arraybackslash}p{#1}}
+
+\captionsetup{font=small,labelfont=bf}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\small MuscleMimic / mjlab / Qflex}
+\lhead{\small Framework comparison}
+\cfoot{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% =====================================================================
+\begin{document}
+
+\title{\vspace{-1.5cm}\textbf{Three Roads to Musculoskeletal Control}\\[0.3em]
+\large A technical comparison of MuscleMimic, mjlab, and Qflex}
+\author{claude}
+\date{\today}
+\maketitle
+\vspace{-1cm}
+
+\begin{abstract}
+\noindent
+These three codebases all learn continuous control for high-dimensional, over-actuated
+systems in MuJoCo. Two of them --- MuscleMimic and Qflex --- have been demonstrated on
+muscle-driven human models; mjlab implements muscle actuators but ships no biomechanical
+assets and has published no musculoskeletal result of its own.
+They disagree at almost every design decision that matters: the learning
+paradigm (on-policy policy-gradient versus off-policy value-based), the exploration
+mechanism (isotropic Gaussian versus value-guided flow), the task specification
+(large motion-capture corpora versus single reference trajectories versus pure task
+reward), the physics backend (GPU Warp kernels versus CPU MuJoCo with process-level
+parallelism), the numerics framework (JAX/Flax, PyTorch, JAX/Haiku), and the artifact
+produced at the end (a sharded training checkpoint, a portable ONNX graph, a Python
+pickle). A separate section covers \textbf{MyoSuite}, which is not a fourth competitor but
+the substrate two of the three build on, and whose deliberately algorithm-agnostic design
+explains much of the divergence above. This report documents those differences, states what
+was verified directly against the source, and closes with the practical consequences for
+policy distillation and hardware deployment.
+\end{abstract}
+
+\tableofcontents
+\vspace{0.6em}
+\hrule
+\vspace{0.8em}
+
+% =====================================================================
+\section{Scope and provenance}
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{@{}lL{3.3cm}L{3.4cm}L{3.6cm}@{}}
+\toprule
+ & \textcolor{mmC}{\textbf{MuscleMimic}} & \textcolor{mjC}{\textbf{mjlab}} & \textcolor{qfC}{\textbf{Qflex}} \\
+\midrule
+Origin      & EPFL (Mathis Lab) & MuJoCo Lab / community & Tsinghua (Sui Lab) \\
+Publication & arXiv 2603.25544 (2026) & no paper; v1.4.0 release & ICLR 2026, arXiv 2601.19707 \\
+Package     & \texttt{musclemimic} + vendored \texttt{loco\_mujoco} & \texttt{mjlab} & \texttt{relax} \\
+Lineage     & fork of LocoMuJoCo v1.0.1 & Isaac Lab API on MuJoCo Warp & standalone \\
+What it is  & an \emph{application}: MSK motion-imitation at scale & a \emph{framework}: general RL/robotics environment toolkit & an \emph{algorithm}: a new exploration mechanism, plus a benchmark harness \\
+\bottomrule
+\end{tabular}
+\caption{What each project actually is. The category difference drives most of what follows:
+MuscleMimic optimises one task family deeply, mjlab provides reusable machinery,
+and Qflex contributes a learning rule evaluated across borrowed benchmarks.}
+\end{table}
+
+\noindent
+This asymmetry is worth holding onto. Comparing them like-for-like is slightly unfair:
+MuscleMimic ships two validated musculoskeletal models and a retargeted corpus but only
+one algorithm; mjlab ships a rich environment API and deployment tooling but no
+biomechanical assets; Qflex ships twelve algorithms and no environments of its own
+(every benchmark is a git submodule).
+
+% =====================================================================
+\section{Executive summary}
+
+\begin{table}[h!]
+\centering
+\footnotesize
+\begin{tabular}{@{}lL{3.2cm}L{3.2cm}L{3.5cm}@{}}
+\toprule
+ & \textcolor{mmC}{\textbf{MuscleMimic}} & \textcolor{mjC}{\textbf{mjlab}} & \textcolor{qfC}{\textbf{Qflex}} \\
+\midrule
+Learning paradigm & on-policy policy gradient & on-policy policy gradient & \textbf{off-policy actor--critic} \\
+Algorithm & PPO (vendored, PureJaxRL lineage) & PPO (\texttt{rsl\_rl} dependency) & \textbf{Q-guided flow exploration} \\
+Exploration & Gaussian, learnable $\sigma$ & Gaussian, learnable $\sigma$ & \textbf{value-gradient flow} \\
+Data reuse & 1 gradient epoch, discard & 5 epochs typical, discard & \textbf{replay buffer, $10^6$} \\
+Task signal & 972+ mocap clips & command or 1 motion & task reward (+1 ref.\ traj) \\
+Physics & MuJoCo Warp via MJX & MuJoCo Warp direct & \textbf{CPU MuJoCo} \\
+Numerics & JAX + Flax & \textbf{PyTorch} & JAX + Haiku \\
+Parallelism & 8192 GPU envs & 4096 GPU envs & \textbf{8 CPU processes} \\
+Budget & $10^9$ steps ($\approx$20\,h) & $\sim\!10^8$--$10^9$ steps & $5\times10^6$ steps \\
+Output & Orbax checkpoint dir & \textbf{.pt + .onnx} & dill pickle \\
+Deployable artifact & \no & \yes & \no \\
+Distillation & \no & available, unwired & \no \\
+\bottomrule
+\end{tabular}
+\caption{At a glance. Bold marks the entry that differs from the other two.}
+\end{table}
+
+\noindent
+Three headline observations:
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=0.35em]
+\item \textbf{Qflex is the theoretical outlier.} MuscleMimic and mjlab are both on-policy
+PPO with Gaussian exploration and differ mainly in engineering. Qflex changes the learning
+rule itself, and its contribution is specifically an \emph{exploration} mechanism for
+over-actuated systems --- exactly the regime of a 400--700 muscle model.
+
+\item \textbf{mjlab is the engineering outlier.} It is the only one that emits a portable,
+self-describing policy artifact, and the only one whose observation pipeline models
+sensor latency.
+
+\item \textbf{MuscleMimic is the data outlier.} It is the only one built around a large
+retargeted motion corpus with a goal-conditioned, generalist policy; the other two train
+single-task or single-clip controllers.
+\end{enumerate}
+
+% =====================================================================
+\section{Theoretical learning approach}
+
+\subsection{MuscleMimic and mjlab: on-policy PPO}
+
+Both optimise the standard clipped surrogate objective,
+\begin{equation}
+L^{\text{CLIP}}(\theta) = \hat{\mathbb{E}}_t\!\left[\min\!\big(r_t(\theta)\hat{A}_t,\;
+\mathrm{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon)\hat{A}_t\big)\right],
+\qquad r_t(\theta) = \frac{\pi_\theta(a_t|s_t)}{\pi_{\theta_{\text{old}}}(a_t|s_t)},
+\end{equation}
+with a clipped value loss, GAE$(\gamma,\lambda)$ advantages, and a diagonal Gaussian
+policy $\pi_\theta(a|s) = \mathcal{N}(\mu_\theta(s), \mathrm{diag}(\sigma^2))$ whose
+$\sigma$ is state-independent and learned. Exploration is therefore isotropic noise in
+the native action space --- precisely the strategy Qflex argues degrades with dimension.
+
+The two implementations are genealogically close: mjlab calls \texttt{rsl\_rl} as a
+dependency, while MuscleMimic vendors a PPO whose lineage traces to PureJaxRL through
+LocoMuJoCo. Two fingerprints confirm the latter: the GAE scan carries the constant
+\texttt{unroll=16} (preserved in MuscleMimic's \texttt{rl\_core/rollout\_buffer.py} with
+the comment \emph{``matching PPO''}), and LocoMuJoCo retains PureJaxRL's characteristic
+misspelling \texttt{\_update\_minbatch}, which MuscleMimic silently corrected.
+
+\paragraph{MuscleMimic's one substantive algorithmic claim.}
+Its paper argues that for muscle-actuated systems the number of gradient epochs per batch
+must be $E=1$ --- strictly on-policy. With $E=3$ or $E=10$ the KL divergence between the
+current and data-generating policy spikes above $10^{10}$, whereas $E=1$ stays below
+$10^{-1}$. The attributed cause is muscle activation dynamics,
+\begin{equation}
+\frac{\partial\,\mathrm{act}}{\partial t} = \frac{\mathrm{ctrl}-\mathrm{act}}{\tau(\mathrm{ctrl},\mathrm{act})},
+\qquad
+\tau = \begin{cases}
+\tau_{\text{act}}(0.5 + 1.5\,\mathrm{act}), & \mathrm{ctrl} > \mathrm{act}\\
+\tau_{\text{deact}}/(0.5 + 1.5\,\mathrm{act}), & \mathrm{ctrl} \le \mathrm{act}
+\end{cases}
+\end{equation}
+which amplifies small policy changes through a first-order lag
+($\tau_{\text{act}}=10$\,ms, $\tau_{\text{deact}}=40$\,ms). Discarding every sample after
+one gradient step is affordable only because GPU simulation is cheap; the compensating
+lever is $N_{\text{env}}$, not $E$.
+
+\subsection{Qflex: off-policy actor--critic with value-guided flow}
+
+Qflex replaces Gaussian exploration with a learned transport. The motivating observation
+is that isotropic perturbations lose coverage as $|\mathcal{A}|$ grows, so exploration
+should follow task-relevant gradients instead. It constructs a velocity field aligned
+with the action-gradient of the critic,
+\begin{equation}
+\frac{da^{(t)}}{dt} = v_Q^{(t)}(a^{(t)};s) = M\,\nabla_a Q^{\pi_{\text{old}}}(s,a),
+\qquad a^{(0)} \sim \pi^{(0)}(\cdot|s),
+\end{equation}
+with $M$ a positive-definite preconditioner (Qflex uses $M=I$, i.e.\ Euclidean steepest
+ascent). Proposition~1 of the paper shows that under mild regularity the induced flow is
+a \emph{valid policy-improvement flow}: the advantage
+$F(t;s) = \mathbb{E}_{a\sim\pi^{(t)}}[Q] - \mathbb{E}_{a'\sim\pi^{(0)}}[Q]$
+is monotone nondecreasing in $t$.
+
+In practice the policy is a Gaussian \emph{source} $\pi^{(0)}_\theta$ composed with a
+learned state-dependent velocity field $v_w$, integrated as
+\begin{equation}
+\pi^{(1)}_{\theta,w}(a|s,a^{(0)}) = a^{(0)} + \int_0^1 v_w(t,s,a^{(t)})\,dt .
+\end{equation}
+Targets $a^{(1)}$ are produced by $N=20$ finite gradient-ascent steps on the
+differentiable critic, with a step size truncated by the $\ell_2$ diameter of the action
+box to keep updates inside $[-1,1]^{|\mathcal{A}|}$:
+\begin{equation}
+a^{(\frac{n}{N})} \leftarrow a^{(\frac{n-1}{N})} + \bar\eta\,\nabla_a Q_\phi,
+\qquad
+\bar\eta = \min\!\left(\eta,\ \frac{2\sqrt{|\mathcal{A}|}}{\|\nabla_a Q_\phi\|}\right).
+\end{equation}
+The velocity field is then fit by conditional flow matching against the optimal-transport
+path, $v^{(t)} = a^{(1)} - a^{(0)}$, minimising
+$\mathcal{L}_v(w) = \mathbb{E}\|v_w(t,s,a^{(t)}) - (a^{(1)}-a^{(0)})\|^2$.
+
+Two further departures from the PPO pair:
+\begin{itemize}[leftmargin=1.4em,itemsep=0.2em]
+\item \textbf{Off-policy.} Transitions go to a replay buffer of $10^6$ and are reused,
+giving roughly two orders of magnitude better sample efficiency
+($5\times10^6$ steps versus $10^9$).
+\item \textbf{CrossQ-style critic.} Batch normalisation inside the $Q$-network removes the
+need for a target network and permits a low update-to-data ratio. Critic quality matters
+more here than in PPO, because the critic's \emph{gradient} now steers exploration, not
+just the advantage estimate.
+\end{itemize}
+
+\paragraph{Learnable source distribution.} Unlike diffusion-based online RL that starts
+from a fixed $\mathcal{N}(0,I)$, Qflex's source $\pi^{(0)}_\theta$ is itself trained,
+which the paper reports as the main reason the flow is easy to learn. The diagnostic is
+the \emph{flow superiority ratio}, the fraction of a minibatch for which
+$Q(s,\pi^{(1)}) > Q(s,\pi^{(0)})$; it is reported as markedly higher on musculoskeletal
+tasks than on torque-controlled ones, which is the paper's central empirical claim about
+over-actuation.
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{@{}lL{3.0cm}L{3.0cm}L{3.8cm}@{}}
+\toprule
+ & \textcolor{mmC}{MuscleMimic} & \textcolor{mjC}{mjlab} & \textcolor{qfC}{Qflex} \\
+\midrule
+Family        & on-policy PG & on-policy PG & off-policy actor--critic \\
+Objective     & clipped surrogate & clipped surrogate & $Q$-maximisation + flow matching \\
+Critic use    & advantage baseline & advantage baseline & \textbf{gradient steers exploration} \\
+Exploration   & $\mathcal{N}(\mu,\sigma)$ & $\mathcal{N}(\mu,\sigma)$ & $Q$-guided ODE transport \\
+Target net    & \na & \na & none (BatchNorm critic) \\
+Sample reuse  & $E{=}1$ & $E{\approx}5$ & replay, $10^6$ \\
+Baselines shipped & \na & \na & SAC, CrossQ, DACER, QSM, DIPO, QVPO, SDAC, DPMD, IDEM, DSACT \\
+\bottomrule
+\end{tabular}
+\caption{Learning-rule comparison.}
+\end{table}
+
+% =====================================================================
+\section{Task specification: what the inputs actually are}
+
+This is where the user-facing difference is largest, and it is \emph{not} the case that
+all three are ``trajectories to be followed''.
+
+\subsection{MuscleMimic: a corpus, and a goal-conditioned generalist}
+
+Training consumes a \emph{dataset} of retargeted clips --- 972 train / 108 test for
+MyoFullBody (\texttt{KIT\_KINESIS\_TRAINING\_MOTIONS}, curated by Kinesis from AMASS+KIT),
+and 1770 / 312 for MyoBimanualArm. The policy is goal-conditioned: its observation
+includes the reference at $n$ future steps, so one network covers the whole corpus.
+
+\begin{itemize}[leftmargin=1.4em,itemsep=0.2em]
+\item \textbf{Goal}: \texttt{GoalTrajMimic} with \texttt{n\_step\_lookahead=5},
+\texttt{n\_step\_stride=20} (0.2\,s at 100\,Hz), a normalised motion-phase scalar, and a
+``concise'' encoding (root position/velocity deltas plus site relative positions) without
+which 5-step lookahead over 17 sites would inflate the observation fivefold.
+\item \textbf{Reward}: DeepMimic-style, $r_t = \max\{0,\, r^{\text{imit}}_t + P_t\}$ with
+$r^{\text{imit}}_t = w_q r_q + w_{\dot q} r_{\dot q} + w_p r_p + w_\theta r_\theta
++ w_v r_{v\omega} + w_v r_{vv}$, each term an exponential kernel on a tracking error,
+plus penalties including muscle activation energy.
+\item \textbf{Termination}: mean mimic-site deviation \emph{relative to the root frame}
+($\delta_{\text{site}}$), plus a world-frame pelvis check ($\delta_{\text{root}}$).
+Relative rather than absolute, so global drift does not kill a biomechanically valid gait.
+\item \textbf{Sampling}: clips are prioritised by EMA-smoothed early-termination rate,
+with a uniform floor --- a soft replacement for Kinesis's discrete hard-negative mining.
+\end{itemize}
+
+\subsection{mjlab: commands, or one registry motion}
+
+mjlab's two flagship tasks are structurally different from each other:
+\emph{velocity tracking} is command-driven (the policy receives a sampled target velocity,
+no reference motion exists), while \emph{motion tracking} follows a single preprocessed
+motion fetched from a W\&B registry. Neither is a corpus-scale imitation setup. Rewards
+are assembled from composable manager terms rather than a fixed formula.
+
+\subsection{Qflex: task reward, with one reference trajectory where needed}
+
+Most Qflex benchmarks are pure reward maximisation with no reference at all ---
+\texttt{myoHandPenTwirlRandom-v0}, \texttt{h1-run-v0}, \texttt{OstrichRun-v1},
+\texttt{SMPLHumanoidJump-v1}, \texttt{myoLegWalk-v0}. The MS-Human-700 locomotion task is
+a hybrid, and the closest point of contact with MuscleMimic. From
+\texttt{envs/ms\_700\_walk/locomotion\_v1.py}:
+\begin{equation}
+r = w_{\text{vel}} r_{\text{vel}} + w_{\text{qpos}} r_{\text{qpos}}
+  + w_{\text{qvel}} r_{\text{qvel}} + w_{\text{act}} r_{\text{act}}
+  + w_{\text{healthy}} r_{\text{healthy}}
+\end{equation}
+with $r_{\text{qpos}} = -\sum (q^{*} - q)^2$ over a masked joint set,
+$r_{\text{qvel}} = -\|\dot q^{*} - \dot q\|$,
+$r_{\text{act}} = -\|\mathbf{a}\|/n_a$ (the same muscle-energy idea as MuscleMimic and
+Kinesis), and $r_{\text{vel}}$ penalising deviation from a target COM velocity
+(default $v_x = 1.25$\,m/s). Reference-state initialisation is used
+(\texttt{init\_qpos = qpos\_target}).
+
+The critical structural difference: the reference is a \textbf{single} trajectory,
+queried \emph{by time} through a SciPy spline
+(\texttt{trajectory.query(time=self.data.time + self.\_reset\_time)}), loaded from a
+\texttt{.mot} file and optionally paired with EMG. There is no clip dataset, no corpus
+sampling, and no $n$-step lookahead --- only the instantaneous error
+$\texttt{qpos\_dist} = q^{*} - q$ appears in the observation, together with a periodic
+phase variable.
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{@{}lL{3.0cm}L{3.0cm}L{3.6cm}@{}}
+\toprule
+ & \textcolor{mmC}{MuscleMimic} & \textcolor{mjC}{mjlab} & \textcolor{qfC}{Qflex (MS700)} \\
+\midrule
+Reference data   & 972+ clips, retargeted & 1 motion, or none & 1 \texttt{.mot} trajectory \\
+Indexed by       & clip id + step & time & \textbf{wall-clock time (spline)} \\
+Policy sees      & goal + 5-step lookahead & goal (tracking task) & instantaneous error + phase \\
+Generalist?      & \yes, one net for corpus & per-task & per-task \\
+Retargeting      & SMPL fit + GMR-Fit IK & external preprocessing & pre-baked \texttt{.mot} \\
+Energy penalty   & \yes & optional term & \yes \\
+RSI              & \yes & \yes & \yes \\
+\bottomrule
+\end{tabular}
+\caption{Task-specification comparison. ``Indexed by wall-clock time'' is the sharpest
+difference: Qflex's reference is a continuous function of $t$, MuscleMimic's is a
+discrete corpus with adaptive sampling.}
+\end{table}
+
+% =====================================================================
+\section{Technical implementation}
+
+\subsection{Physics backends}
+
+All three use MuJoCo, but reach it very differently.
+
+\begin{table}[h!]
+\centering
+\footnotesize
+\begin{tabular}{@{}lL{3.1cm}L{3.1cm}L{3.5cm}@{}}
+\toprule
+ & \textcolor{mmC}{MuscleMimic} & \textcolor{mjC}{mjlab} & \textcolor{qfC}{Qflex} \\
+\midrule
+Engine & \texttt{mujoco-mjx} 3.4.0 & \texttt{mujoco-warp} $\ge$3.8.0.3 & \texttt{gymnasium[mujoco]} 1.0.0 \\
+Path to kernels & MJX with \texttt{impl='warp'} & \texttt{mujoco\_warp} directly & \textbf{CPU MuJoCo} \\
+Kernel language & NVIDIA Warp (CUDA) & NVIDIA Warp (CUDA) & C \\
+Also supports & MJX/XLA; CPU for eval & CPU for eval (macOS) & CPU only \\
+Vectorisation & \texttt{jax.vmap}, 8192 envs & batched Warp, 4096 envs & \textbf{multiprocessing + SharedMemory, 8 envs} \\
+GPU required & for training & for training & \no \\
+\bottomrule
+\end{tabular}
+\caption{Physics. Note the first two converge on the \emph{same} Warp kernels by different
+routes; Qflex does not use GPU physics at all.}
+\end{table}
+
+\noindent
+The MuscleMimic/mjlab convergence deserves emphasis: because MuJoCo 3.4 unified the MJX
+interface with a selectable implementation, \texttt{mjx.put\_model(model, impl='warp')}
+dispatches to the same Warp kernels that \texttt{mujoco\_warp} exposes. The physics is
+therefore not a fidelity difference between those two --- it is a host-language
+difference. Qflex, by contrast, runs stock CPU MuJoCo behind a Gymnasium interface and
+parallelises with worker processes over shared memory
+(\texttt{relax/env/vector/process1.py}).
+
+This also explains Qflex's step budget. At 8 CPU environments it cannot brute-force
+$10^9$ steps, so sample efficiency is not a stylistic preference but a requirement ---
+which is consistent with choosing an off-policy method.
+
+\subsection{Learning stack}
+
+\begin{table}[h!]
+\centering
+\footnotesize
+\begin{tabular}{@{}lL{3.1cm}L{3.1cm}L{3.4cm}@{}}
+\toprule
+ & \textcolor{mmC}{MuscleMimic} & \textcolor{mjC}{mjlab} & \textcolor{qfC}{Qflex} \\
+\midrule
+Array framework & JAX 0.7.2 & \textbf{PyTorch $\ge$2.7} & JAX 0.4.27 \\
+NN library & Flax 0.12.0 & \texttt{torch.nn} & \textbf{dm-haiku} \\
+Optimiser lib & optax & torch.optim (via rsl\_rl) & optax \\
+Distributions & distrax 0.1.7 & torch.distributions & hand-rolled \\
+RL code & vendored ($\sim$5.5k LOC) & \texttt{rsl-rl-lib} 5.2.0 & vendored \texttt{relax} ($\sim$9.6k LOC) \\
+Checkpointing & orbax-checkpoint 0.11.37 & \texttt{torch.save} & \textbf{dill} 0.3.8 \\
+Config & Hydra + YAML & \texttt{tyro} dataclasses & argparse \\
+Multi-GPU & \na & \texttt{torchrunx} & \na \\
+Logging & W\&B & W\&B + TensorBoard & W\&B + TensorBoardX \\
+\bottomrule
+\end{tabular}
+\caption{Learning stack. Qflex and MuscleMimic are both JAX but share no libraries:
+Haiku versus Flax, and a four-minor-version JAX gap.}
+\end{table}
+
+\paragraph{Dependency versus vendoring.}
+mjlab \emph{depends} on \texttt{rsl\_rl}, so it inherits every feature that library gains.
+MuscleMimic and Qflex both \emph{vendor} their RL code, so they inherit nothing and
+maintain everything. This single architectural choice explains the distillation gap in
+Section~\ref{sec:distill} far better than JAX-versus-PyTorch does.
+
+\subsection{Policy architectures}
+
+\begin{table}[h!]
+\centering
+\footnotesize
+\begin{tabular}{@{}lL{3.1cm}L{3.1cm}L{3.4cm}@{}}
+\toprule
+ & \textcolor{mmC}{MuscleMimic} & \textcolor{mjC}{mjlab} & \textcolor{qfC}{Qflex} \\
+\midrule
+Actor & $16\times1024$ gated residual, SiLU, LayerNorm & MLP (task-configured) & MLP $3\times256$ \\
+Residual gate & $\sigma(g_l)$, $g_l$ init $-2$ & \na & \na \\
+Extra heads & \na & \na & velocity field $3\times256$ \\
+Obs normalisation & Welford running mean/std & running normaliser (rsl\_rl) & --- \\
+Optimiser & \textbf{Muon} (2D) + Adam (1D) & Adam & Adam, $3\text{e-}4 \to 3\text{e-}5$ \\
+Mixture of experts & Soft-MoE layers (optional) & \na & \na \\
+\bottomrule
+\end{tabular}
+\caption{Network design. MuscleMimic's actor is by far the largest; Qflex compensates
+for a small network with a better exploration rule.}
+\end{table}
+
+\noindent
+The depth gap is striking --- $16\times1024$ against $3\times256$ --- and reflects the
+paradigms. MuscleMimic must encode a whole motion corpus in the weights of a generalist
+goal-conditioned policy; Qflex learns one task at a time and spends its capacity on the
+critic and the flow instead.
+
+\subsection{Observation pipelines}
+\label{sec:obs}
+
+\begin{itemize}[leftmargin=1.4em,itemsep=0.3em]
+\item \MM. Observations are registered plug-ins with group tags. Muscle-specific types
+were added to the vendored LocoMuJoCo core: \texttt{ActuatorLength},
+\texttt{ActuatorVelocity}, \texttt{ActuatorForce}, \texttt{ActuatorExcitation},
+\texttt{ActuatorActivation}, \texttt{TouchSensor}. Asymmetric actor/critic observation is
+supported via index masking (\texttt{actor\_obs\_group} / \texttt{critic\_obs\_group}) but
+is unused in the shipped configs. History stacking via
+\texttt{NStepWrapper(split\_goal=True)}. \emph{No noise or latency model.}
+
+\item \MJ. A per-term pipeline:
+\texttt{compute $\rightarrow$ noise $\rightarrow$ clip $\rightarrow$ scale $\rightarrow$ delay $\rightarrow$ history}.
+Noise may be stateless (\texttt{NoiseCfg}) or stateful (\texttt{NoiseModelCfg}). The delay
+model is genuinely detailed: \texttt{delay\_min\_lag}/\texttt{delay\_max\_lag} sampled
+per-environment, \texttt{delay\_hold\_prob} for temporally correlated latency,
+\texttt{delay\_update\_period} for multi-rate sensors, \texttt{delay\_per\_env\_phase} to
+destagger resampling. Named groups with \texttt{enable\_corruption} let one term
+definition serve both a noisy actor group and a clean critic group.
+
+\item \QF. Observations are assembled by the environment wrapper as a plain concatenation.
+For MS700: \texttt{qpos, qvel, qacc, act, actuator\_forces} (scaled $/1000$, clipped
+$\pm100$), \texttt{actuator\_length, actuator\_velocity} (clipped), \texttt{sim\_time},
+a phase variable, pelvis and sternum positions, and \texttt{qpos\_dist}. Note this
+includes the same muscle-state channels MuscleMimic added --- arrived at independently.
+\emph{No noise, clipping, or latency framework.}
+\end{itemize}
+
+\noindent
+For a controller that must eventually run on real hardware with real sensors, mjlab's
+pipeline is the only one of the three that models the sensing problem.
+
+% =====================================================================
+\section{Outputs, artifacts, and deployment}
+\label{sec:outputs}
+
+\begin{table}[h!]
+\centering
+\footnotesize
+\begin{tabular}{@{}lL{3.1cm}L{3.3cm}L{3.3cm}@{}}
+\toprule
+ & \textcolor{mmC}{MuscleMimic} & \textcolor{mjC}{mjlab} & \textcolor{qfC}{Qflex} \\
+\midrule
+Training checkpoint & Orbax OCDBT \emph{directory} & \texttt{.pt} (\texttt{torch.save}) & \texttt{.pkl} (dill) \\
+Contents & weights, optimiser, Welford stats, RNG, \texttt{\_sharding} & state dicts + infos & params + Haiku state \\
+Deployment artifact & \textbf{none} & \textbf{\texttt{.onnx}, opset 18} & \texttt{stochastic.pkl} / \texttt{deterministic.pkl} \\
+Normaliser baked in & \na & \yes & \no \\
+Embedded metadata & \na & \yes (see below) & \texttt{.txt} sidecar \\
+Runs without the training framework & \no & \yes & \no \\
+ONNX packages installed & \textbf{0} & 8 & 0 \\
+\bottomrule
+\end{tabular}
+\caption{Output formats. Verified: \texttt{find . -name '*.onnx'} returns zero results in
+both MuscleMimic and Qflex, and neither declares an ONNX dependency.}
+\end{table}
+
+\subsection{MuscleMimic: a training checkpoint, not a policy}
+
+\begin{lstlisting}
+checkpoints/<run-hash>/checkpoint_8500/
+  _CHECKPOINT_METADATA
+  train_state/            # OCDBT / tensorstore
+    _sharding             # JAX device-sharding spec
+    manifest.ocdbt
+    array_metadatas/
+    ocdbt.process_0/
+  config/metadata         # JSON: full Hydra config
+  metadata/metadata       # JSON: step, update_number, lr, ...
+\end{lstlisting}
+
+\noindent
+Running a policy requires JAX, the \texttt{musclemimic} package, and reconstruction of the
+MuJoCo environment object to recover observation indexing
+(\texttt{play\_policy} / \texttt{play\_policy\_mujoco}). There is no export step of any
+kind --- no ONNX, TorchScript, SavedModel, StableHLO, or TFLite.
+
+\subsection{mjlab: a self-describing deployment artifact}
+
+ONNX export runs automatically on every checkpoint save. The exported graph bakes in the
+observation normaliser and the deterministic output head, so the artifact is
+raw-observations $\rightarrow$ actions with no external state. Metadata is written into
+\texttt{model.metadata\_props}:
+
+\begin{lstlisting}
+run_path, joint_names, joint_stiffness, joint_damping,
+default_joint_pos, command_names, observation_names, action_scale
+\end{lstlisting}
+
+\noindent
+The motion-tracking variant goes further, registering the reference motion itself as ONNX
+buffers (\texttt{joint\_pos}, \texttt{joint\_vel}, \texttt{body\_pos\_w}, \ldots) and
+exposing a \texttt{(obs, time\_step)} signature, so a tracking policy ships as one file
+with no Python-side trajectory loader. TorchScript export is also available via
+\texttt{\_TorchMLPModel}.
+
+\paragraph{One caveat for muscle models.} \texttt{get\_base\_metadata()} asserts
+\texttt{isinstance(joint\_action, JointPositionAction)} and reads
+\texttt{actuator\_gainprm}/\texttt{actuator\_biasprm} as PD gains. A muscle-actuated model
+has neither, so this helper must be given a muscle variant before the ONNX pipeline works
+for an MSK embodiment.
+
+\subsection{Qflex: pickled JAX callables}
+
+\texttt{save\_policy\_structure} uses a custom dill-based pickler to persist \emph{traced
+callables} (\texttt{stochastic.pkl}, \texttt{deterministic.pkl}) alongside human-readable
+\texttt{.txt} summaries; \texttt{save\_policy} writes \texttt{(params, state)} tuples
+periodically, and \texttt{state.pkl} holds the full algorithm state at the end. This is
+portable across machines but not across frameworks, and carries the usual caveat that
+unpickling executes code.
+
+\subsection{External tool compatibility}
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Consumer & \textcolor{mmC}{MuscleMimic} & \textcolor{mjC}{mjlab} & \textcolor{qfC}{Qflex} \\
+\midrule
+ONNX Runtime (C/C++, ARM)      & \no & \yes & \no \\
+TensorRT                        & \no & \yes & \no \\
+TorchScript / LibTorch          & \no & \yes & \no \\
+Netron graph inspection         & \no & \yes & \no \\
+ROS\,2 / real-time C++ node     & \no & \yes & \no \\
+Reload into own framework       & \yes & \yes & \yes \\
+HuggingFace hosting             & \yes & \yes & \na \\
+\bottomrule
+\end{tabular}
+\caption{Only mjlab produces an artifact consumable outside its own Python process.}
+\end{table}
+
+\noindent
+The practical obstacle is not the weights. All three policies are MLPs, and extracting
+arrays into NumPy is straightforward. The obstacle is the \textbf{observation contract}:
+which quantities, in which order, with what history stacking, goal lookahead, and
+normalisation. mjlab records this inside the artifact; the other two require the training
+framework to reconstruct it.
+
+% =====================================================================
+\section{Musculoskeletal model support}
+\label{sec:msk}
+
+\begin{table}[h!]
+\centering
+\footnotesize
+\begin{tabular}{@{}lL{3.0cm}L{3.0cm}L{3.5cm}@{}}
+\toprule
+ & \textcolor{mmC}{MuscleMimic} & \textcolor{mjC}{mjlab} & \textcolor{qfC}{Qflex} \\
+\midrule
+MSK assets shipped & MyoFullBody, MyoBimanualArm & \textbf{none} (G1, Go1, YAM) & MS-Human-700 (submodule), MyoSuite \\
+Largest model & 416 muscles, 123 joints, 72 DoF & \na & \textbf{700 muscles, 85 DoF} \\
+Muscle actuator support & native & \texttt{BuiltinMuscleActuator}, \texttt{XmlActuatorCfg} & via MyoSuite/MuJoCo \\
+Tendon transmission & \yes & \yes (\texttt{TendonEffortAction}) & \yes \\
+Muscle-state obs & 5 channels + touch & user-defined terms & 3 channels \\
+Activation-energy penalty & \yes & user-defined & \yes \\
+Validated against & kinematics, kinetics, GRF, EMG & \na & task reward only \\
+\bottomrule
+\end{tabular}
+\caption{Muscle support. Measured directly: \texttt{MS-Human-700.xml} loads as
+\texttt{nq=85, nu=na=700, ntendon=700}; the bundled
+\texttt{MS-Human-700-Locomotion.xml} subset is \texttt{nq=36, nu=100}, and the
+environment loads the full model.}
+\end{table}
+
+\noindent
+mjlab has no biomechanical assets but is architecturally ready for them. Its
+\texttt{XmlActuatorCfg} docstring states explicitly that MJCF containing
+\texttt{<muscle>} elements is wrapped without re-specifying gains, and
+\texttt{mujoco\_warp} implements the full Hill-type stack in Warp kernels
+(\texttt{muscle\_dynamics}, \texttt{muscle\_gain}, \texttt{muscle\_bias}, and the
+corresponding \texttt{DynType}/\texttt{GainType}/\texttt{BiasType} enums). Importing an
+MSK model is therefore a matter of porting the MDP, not the physics.
+
+\paragraph{No first-party musculoskeletal result.} To be precise about what mjlab has and
+has not shown: its twelve registered tasks are \texttt{Mjlab-Cartpole-\{Balance,Swingup\}},
+four YAM manipulation tasks, two Unitree G1 tracking tasks, and four velocity-tracking
+tasks on G1/Go1. None involves a muscle-driven model, and \texttt{asset\_zoo} contains only
+\texttt{unitree\_g1}, \texttt{unitree\_go1}, and \texttt{i2rt\_yam}. The sole musculoskeletal
+connection is a \emph{third-party} entry on mjlab's ``Projects built on mjlab'' page,
+\texttt{MyoHub/mjlab\_myosuite} (``Musculoskeletal simulation integration with MyoSuite''),
+which is neither vendored nor a dependency --- \texttt{grep} for it across \texttt{src/},
+\texttt{pyproject.toml}, and \texttt{uv.lock} returns nothing. It is assessed separately in
+Section~\ref{sec:mjlabmyo}.
+
+% =====================================================================
+\section{MyoSuite: the common substrate}
+\label{sec:myosuite}
+
+MyoSuite is not a fourth competitor; it is the layer the other three stand on. MuscleMimic's
+embodiments are assembled from MyoSuite components (MyoArm, MyoLegs, MyoBack); Qflex
+benchmarks on \texttt{myoLegWalk-v0} and \texttt{myoHandPenTwirlRandom-v0}; and
+\texttt{mjlab\_myosuite} (Section~\ref{sec:mjlabmyo}) exists solely to bridge to it.
+Understanding what a MyoSuite environment \emph{is} therefore clarifies several earlier
+sections. Measurements below are against \textbf{v2.12.2}, which pins
+\texttt{mujoco>=3.6,<3.7}.
+
+\subsection{Anatomy of an environment}
+
+A MyoSuite environment is one registration entry, one MuJoCo XML, and one Python class.
+
+\begin{lstlisting}
+register(
+    id="myoLegWalk-v0",
+    entry_point="myosuite.envs.myo.myobase.walk_v0:WalkEnvV0",
+    max_episode_steps=1000,
+    kwargs={"model_path": curr_dir + leg_model, "normalize_act": True,
+            "min_height": 0.8, "max_rot": 0.8, "hip_period": 100,
+            "reset_type": "init", "target_x_vel": 0.0, "target_y_vel": 1.2,
+            "target_rot": None},
+)
+\end{lstlisting}
+
+\noindent
+Task variants are simply different \texttt{kwargs}. Models live in
+\texttt{myosuite/simhive/}, a hive of asset submodules (\texttt{myo\_sim},
+\texttt{MPL\_sim}, \texttt{object\_sim}, \texttt{YCB\_sim},
+\texttt{furniture\_sim}). The class sits three levels deep:
+
+\begin{lstlisting}
+gym.Env + EzPickle + ObsVecDict
+  \-- MujocoEnv      (envs/env_base.py)      generic MuJoCo + the MDP contract
+       \-- BaseV0    (envs/myo/base_v0.py)   muscle-specific behaviour
+            \-- WalkEnvV0 (myobase/walk_v0.py)  the task
+\end{lstlisting}
+
+\subsection{The MDP contract: two lists and two methods}
+
+\texttt{MujocoEnv.\_setup} fixes the contract --- \texttt{obs\_keys} (which entries of an
+observation dict form the policy input), \texttt{weighted\_reward\_keys} (keys and weights
+that sum to the reward), plus \texttt{proprio\_keys}, \texttt{visual\_keys},
+\texttt{reward\_mode} (\texttt{dense}/\texttt{sparse}), \texttt{frame\_skip},
+\texttt{normalize\_act}, and \texttt{obs\_range} (default $\pm 10$). A concrete task then
+supplies two lists and two methods:
+
+\begin{lstlisting}
+DEFAULT_OBS_KEYS = ["qpos_without_xy", "qvel", "com_vel", "torso_angle",
+    "feet_heights", "height", "feet_rel_positions", "phase_var",
+    "muscle_length", "muscle_velocity", "muscle_force"]
+
+DEFAULT_RWD_KEYS_AND_WEIGHTS = {"vel_reward": 5.0, "done": -100,
+    "cyclic_hip": -10, "ref_rot": 10.0, "joint_angle_rew": 5.0}
+
+def get_obs_dict(self, mj_model, mj_data) -> dict         # named quantities
+def get_reward_dict(self, obs_dict) -> OrderedDict        # named components
+\end{lstlisting}
+
+\noindent
+The observation vector is \texttt{concatenate(obs\_dict[k] for k in obs\_keys)}.
+\texttt{get\_reward\_dict} must emit three keys --- \texttt{"sparse"}, \texttt{"solved"},
+and \texttt{"done"} --- after which \texttt{rwd\_dict["dense"]} is computed as
+$\sum_k w_k\,\mathrm{rwd}_k$. Three consequences follow, and all three were already visible
+in earlier sections:
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=0.25em]
+\item \textbf{Muscle state is already first-class.} \texttt{muscle\_length},
+\texttt{muscle\_velocity} and \texttt{muscle\_force} are default observations, and
+\texttt{BaseV0} auto-appends \texttt{"act"} whenever \texttt{mj\_model.na > 0}. MuscleMimic's
+\texttt{ActuatorLength}/\texttt{ActuatorVelocity}/\texttt{ActuatorForce} observation types
+(Section~\ref{sec:msk}) are the same channels, arrived at independently.
+\item \textbf{There is no processing layer.} The path from \texttt{get\_obs\_dict} to the
+network is concatenation and a clip to \texttt{obs\_range}. No noise, scaling, delay, or
+history --- no seam at which to attach them. This is the structural reason wrapping MyoSuite
+cannot recover mjlab's observation pipeline (Section~\ref{sec:obs}).
+\item \textbf{Termination lives inside the reward.} \texttt{"done"} is a key of
+\texttt{rwd\_dict}, so reward and episode end are computed in one method rather than by
+independent managers.
+\end{enumerate}
+
+\paragraph{Clinical conditions.} \texttt{BaseV0} exposes a \texttt{muscle\_condition} switch
+with no analogue in any of the three frameworks compared here:
+
+\begin{lstlisting}
+"sarcopenia"      -> halve every actuator's peak force (gainprm[:,2] *= 0.5)
+"fatigue"         -> attach the 3CC-r cumulative fatigue model
+"reafferentation" -> simulate EIP -> EPL tendon-transfer surgery
+\end{lstlisting}
+
+\noindent
+plus \texttt{fatigue\_reset\_vec} and \texttt{fatigue\_reset\_random}. For prosthetics and
+rehabilitation work this is a substantive capability, not a curiosity.
+
+\subsection{Training: adapters, not algorithms}
+
+MyoSuite implements \textbf{no RL algorithm of its own}. Its runtime dependencies contain no
+RL library at all (\texttt{gymnasium}, \texttt{mujoco}, \texttt{h5py}, \texttt{numpy},
+\texttt{pink-noise-rl}, \ldots). What it ships instead is integration:
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{@{}L{4.4cm}L{8.4cm}@{}}
+\toprule
+Component & What it wraps \\
+\midrule
+\texttt{mjrl\_job\_script.py}, \texttt{hydra\_mjrl\_launcher.py} & \textbf{MJRL} --- Natural Policy Gradient; the headline baseline \\
+\texttt{sb3\_job\_script.py}, \texttt{hydra\_sb3\_launcher.py} & \textbf{Stable-Baselines3} --- PPO and SAC configs \\
+\texttt{torchrl\_job\_script.py} & \textbf{TorchRL} \\
+\texttt{baseline\_Reflex/reflexCtr.py} & a non-learned reflex controller \\
+\texttt{SAR\_pretrained/} & pretrained Synergistic Action Representation policies \\
+tutorials \texttt{4a}, \texttt{4c}, \texttt{SAR/} & \textbf{DEP-RL}, SB3, SAR walkthroughs \\
+\bottomrule
+\end{tabular}
+\caption{\texttt{myosuite/agents/} is a baselines directory: only 8 Python files
+($\approx$2{,}000 lines) among 361, the remainder being YAML configs, pickled policies,
+CSV logs and plots. Hydra and submitit provide cluster launching.}
+\end{table}
+
+\subsection{GPU training: a second, disjoint implementation}
+
+MyoSuite does have a GPU path, in main under the \texttt{[mjx]} extra --- but it is not an
+acceleration of the classic environments. It is a \emph{parallel class hierarchy} that
+shares no base class, no method names, and no array library with them:
+
+\begin{table}[h!]
+\centering
+\footnotesize
+\begin{tabular}{@{}L{3.0cm}L{4.6cm}L{4.8cm}@{}}
+\toprule
+ & classic path & MJX path \\
+\midrule
+Base class   & \texttt{gym.Env} $\to$ \texttt{MujocoEnv} $\to$ \texttt{BaseV0} & \texttt{mjx\_env.MjxEnv} (MuJoCo Playground) $\to$ \texttt{MjxMyoBase} \\
+Gym import   & \yes & \textbf{none} \\
+Reset        & \texttt{reset(**kwargs)} & \texttt{reset(rng) -> State} \\
+Step         & \texttt{step(a)}, mutates \texttt{self.mj\_data} & \texttt{step(state, action) -> State}, \textbf{pure} \\
+Task hooks   & \texttt{get\_obs\_dict}, \texttt{get\_reward\_dict} & \texttt{\_get\_obs}, \texttt{\_get\_rewards}, \texttt{\_get\_done}, \texttt{\_get\_metrics} \\
+Arrays       & NumPy & \texttt{jax.numpy} \\
+Trainer      & MJRL / SB3 / TorchRL / DEP-RL & \textbf{Brax PPO} \\
+\textbf{Environments} & \textbf{31} & \textbf{2} (\texttt{playground\_pose\_v0}, \texttt{playground\_reach\_v0}) \\
+\bottomrule
+\end{tabular}
+\caption{The two MyoSuite paths. \texttt{MjxPoseEnvV0} and \texttt{PoseEnvV0} are the same
+task written twice.}
+\end{table}
+
+\noindent
+Every line of \texttt{MjxMyoBase.step} is a \texttt{state.replace(...)} --- a new pytree,
+never a mutation of \texttt{self}. That purity is the whole point, because MyoSuite performs
+no batching itself; it hands the env to Brax:
+
+\begin{lstlisting}
+from mujoco_playground import wrapper
+make_inference_fn, params, _ = ppo.train(
+    num_envs=env._config.num_envs,
+    wrap_env_fn=wrapper.wrap_for_brax_training, ...)
+\end{lstlisting}
+
+\noindent
+Playground's wrapper batches, and Brax's PPO \texttt{jit}s and \texttt{vmap}s across
+environments. The shipped \texttt{ppo\_config} is 50M timesteps, lr $3\times10^{-4}$,
+$\gamma=0.97$, $\lambda=0.95$, $\epsilon=0.3$, 32 minibatches, \textbf{8} update epochs,
+batch 256, unroll 10, normalised observations, and $(64,64,64)$ policy and value networks
+--- note that this is a far smaller network and a far more aggressive epoch count than
+MuscleMimic's $16\times1024$ at $E=1$ (Section~\ref{sec:distill}).
+
+\paragraph{Why the coverage gap is structural.} A Gymnasium environment is a stateful Python
+object owning one \texttt{mj\_data}; \texttt{jax.vmap} requires a pure function over array
+pytrees. No wrapper converts one into the other --- the only options are running $N$ copies
+in a loop or rewriting the environment. Hence 31 classic environments and 2 MJX ones: the
+rewrite is manual and per-environment. This single fact explains both MyoSuite's $\approx$6\%
+GPU coverage and the vectorisation behaviour of \texttt{mjlab\_myosuite} below.
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{@{}L{4.2cm}L{4.4cm}L{4.0cm}@{}}
+\toprule
+ & Environment model & Batching performed by \\
+\midrule
+MyoSuite (classic)   & stateful Gym object & nothing built in \\
+MyoSuite (MJX)       & pure JAX function & Brax / Playground \\
+\textcolor{mmC}{MuscleMimic} & pure JAX function & its own \texttt{vmap} \\
+\textcolor{mjC}{mjlab}       & batched Warp + torch tensors & \textbf{the env itself} \\
+\textcolor{qfC}{Qflex}       & stateful Gym object & 8 CPU processes (shared memory) \\
+\bottomrule
+\end{tabular}
+\caption{The fault line running through every project here. MyoSuite-MJX and MuscleMimic are
+architecturally the same kind of object; mjlab takes the third road, batching inside the
+environment rather than replicating a pure function.}
+\end{table}
+
+% =====================================================================
+\section{Addendum: \texttt{mjlab\_myosuite}, a third-party MSK bridge}
+\label{sec:mjlabmyo}
+
+Since mjlab ships no biomechanical assets, the obvious question is whether the community
+project referenced in Section~\ref{sec:msk} closes that gap. It does, partially, and in a
+way that is worth understanding precisely --- because the architecture it chose forfeits
+most of the mjlab features that motivated the comparison in the first place.
+
+\subsection{What it is}
+
+\texttt{MyoHub/mjlab\_myosuite} is a \emph{fork} of mjlab by git history --- 280 commits
+reaching back to mjlab's ``Initial public release'' of 2025-09-29 --- that was later
+restructured to consume mjlab as an ordinary dependency (commit \texttt{9d31812},
+``use mjlab as dependency''). Its own source tree is 4{,}899 lines across 19 modules, plus
+1{,}615 lines of tests. The README opens with a banner reading
+\emph{``Early Prototype --- breaking changes are likely''}, and the package metadata
+declares \texttt{Development Status :: 4 - Beta} at version \texttt{0.1.0}.
+
+\subsection{Architecture: a wrapper, not a port}
+
+This is the decisive design fact. \texttt{mjlab\_myosuite} does \textbf{not} bring
+musculoskeletal models into mjlab's manager-based MDP. It leaves the MDP inside MyoSuite
+and fabricates just enough of mjlab's interface for mjlab's training scripts to run
+against it. The bulk of the package --- \texttt{wrapper.py}, 1{,}457 lines --- defines:
+
+\begin{lstlisting}
+class _MockActionManager: ...
+class _MockObservationManager: ...
+class _MockCommandManager: ...
+class _MockScene: ...
+class MyoSuiteVecEnvWrapper(VecEnv, gym.Env): ...
+\end{lstlisting}
+
+\noindent
+So a MyoSuite Gym environment is adapted to \texttt{rsl\_rl}'s \texttt{VecEnv} and dressed
+in mock managers that satisfy attribute probes such as
+\texttt{hasattr(env, "action\_manager")}.
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{@{}L{5.6cm}cc@{}}
+\toprule
+mjlab capability & native mjlab task & via \texttt{mjlab\_myosuite} \\
+\midrule
+PPO training loop (\texttt{rsl\_rl})        & \yes & \yes \\
+W\&B logging, checkpointing                 & \yes & \yes \\
+ONNX export                                 & \yes & partial (see below) \\
+Viser / native viewer playback              & \yes & \yes \\
+\midrule
+Observation noise, clipping, scaling        & \yes & \textbf{\no} \\
+Sensor-latency model (\texttt{delay\_*})    & \yes & \textbf{\no} \\
+Observation history stacking                & \yes & \textbf{\no} \\
+Reward manager (composable terms)           & \yes & \textbf{\no} \\
+Event manager / domain randomisation        & \yes & \textbf{\no} \\
+Curriculum manager                          & \yes & \textbf{\no} \\
+\texttt{BuiltinMuscleActuator} / \texttt{XmlActuatorCfg} & \yes & \textbf{\no} \\
+Terrain, scene composition                  & \yes & \textbf{\no} \\
+\bottomrule
+\end{tabular}
+\caption{What survives the bridge. Everything below the rule is a manager-layer feature,
+and the manager layer is exactly what the mock objects replace. The MDP --- observations,
+rewards, terminations, actuation --- remains MyoSuite's.}
+\end{table}
+
+\noindent
+For the deployment use case this is the crux: the single strongest argument for routing
+musculoskeletal work through mjlab was its per-term noise and latency pipeline
+(Section~\ref{sec:obs}), and that pipeline is precisely what the wrapper bypasses.
+
+\paragraph{It contributes no parallelism.} Given the two disjoint MyoSuite paths of
+Section~\ref{sec:myosuite}, the wrapper's vectorisation behaviour follows directly
+(\texttt{wrapper.py}:190--207):
+
+\begin{lstlisting}
+if isinstance(env, vector.VectorEnv):
+    self.env = env                 # already batched (MyoSuite MJX) -> pass through
+    self.num_envs = env.num_envs
+else:
+    env_factories = [lambda: copy.deepcopy(env_instance)
+                     for _ in range(num_envs)]
+    self.env = SyncVectorEnv(env_factories)     # <-- serial Python loop
+\end{lstlisting}
+
+\noindent
+For a \emph{classic} MyoSuite environment --- the stateful kind, and the only kind that
+covers locomotion --- the result is \texttt{SyncVectorEnv}: single-threaded, one environment
+stepped after another, not even multiprocessing. That is plausibly slower than MyoSuite's own
+subprocess-based baselines. The README's ``MJX/Warp support'' means only that an
+\emph{already-batched} MyoSuite MJX environment is passed through untouched --- and there are
+two such environments, neither of them locomotion. Either way, mjlab contributes zero
+batching: the GPU parallelism, where it exists, belongs to Brax and Playground.
+
+\subsection{What it adds over MyoSuite alone}
+
+Because MyoSuite already ships a GPU PPO path, W\&B logging, checkpointing, cluster
+launchers and pretrained baselines (Section~\ref{sec:myosuite}), the honest question is not
+what \texttt{mjlab\_myosuite} provides but what it provides \emph{that MyoSuite did not
+already have}.
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{@{}L{5.0cm}L{3.6cm}L{3.8cm}@{}}
+\toprule
+Capability & MyoSuite already has & \texttt{mjlab\_myosuite} adds \\
+\midrule
+PPO on GPU              & \yes\ Brax + Playground & rsl-rl PPO instead \\
+PPO / SAC on CPU        & \yes\ SB3, MJRL, TorchRL & \na \\
+W\&B logging, checkpoints & \yes & \na \\
+Hydra / cluster launchers & \yes\ submitit & \na \\
+Pretrained baselines    & \yes\ SAR, NPG, DEP-RL & \na \\
+\midrule
+ONNX export             & \no & \textbf{new} \\
+Viser playback          & \no & \textbf{new} \\
+rsl-rl as the learner   & \no & \textbf{new} \\
+Unified \texttt{train}/\texttt{play} CLI & shell scripts & tidier \\
+\bottomrule
+\end{tabular}
+\caption{The delta. Three genuine additions; everything above the rule was already present.}
+\end{table}
+
+\begin{itemize}[leftmargin=1.4em,itemsep=0.25em]
+\item \textbf{Automatic registration} of MyoSuite environments as
+\texttt{Mjlab-MyoSuite-<env\_id>}, with a heuristic that treats an id containing
+\texttt{myodm} as a tracking environment (the source comments acknowledge this is
+provisional).
+\item \textbf{Dual-backend detection}: accepts either a classic MyoSuite environment or an
+already-batched MJX one, deciding at runtime --- though as shown above only the second is
+parallel, and only two such environments exist.
+\item \textbf{An ONNX metadata fallback} --- a genuine answer to the
+\texttt{get\_base\_metadata} problem flagged in Section~\ref{sec:msk}.
+\texttt{attach\_myosuite\_onnx\_metadata} probes whether the environment is a real
+\texttt{ManagerBasedRlEnv} (checking \texttt{scene["robot"].spec.actuators}), and on
+failure emits \texttt{\_get\_myosuite\_metadata} instead: action and observation
+dimensions only. That avoids the assertion, but the resulting artifact carries none of
+the joint names, gains, or default pose that make mjlab's native export self-describing.
+\item \textbf{A tracking-task scaffold} under \texttt{tasks/tracking/}, which the README
+labels ``not yet fully implemented''.
+\item \textbf{Viser playback utilities} (\texttt{viewer\_helpers.py}, 486 lines).
+\end{itemize}
+
+\subsection{Version compatibility: it does not run against current mjlab}
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{@{}lL{4.0cm}L{4.0cm}@{}}
+\toprule
+Dependency & pinned by \texttt{mjlab\_myosuite} & current \\
+\midrule
+mjlab (\texttt{pyproject}) & \texttt{git+\ldots/mjlab.git} --- \textbf{no rev, no version bound} & \na \\
+mjlab (\texttt{uv.lock})   & commit \texttt{46f17fbe}, 2026-01-05 & \textbf{v1.4.0}, 2026-05-26 \\
+\texttt{rsl-rl-lib}        & \textbf{3.1.0} (2025-09-18) & \textbf{5.2.0} \\
+\texttt{mujoco-warp}       & rev \texttt{e605c406} & rev \texttt{88b55fc2} \\
+MyoSuite                   & \texttt{git+\ldots/myosuite.git@mjx} (branch) & \na \\
+Last commit                & 2026-02-05 & \na \\
+\bottomrule
+\end{tabular}
+\caption{Dependency pins. The locked mjlab commit predates even mjlab's own v1.0.0 release
+(2026-01-28) by three weeks, and the project has not been touched since 2026-02-05.}
+\end{table}
+
+\noindent
+Resolving all 52 distinct \texttt{mjlab}/\texttt{rsl\_rl} symbols that
+\texttt{mjlab\_myosuite} imports against an installed mjlab 1.4.0 and
+\texttt{rsl-rl-lib} 5.2.0 yields the following genuine failures (import paths that merely
+moved but remain re-exported are excluded, since the code has fallback chains that catch
+them):
+
+\begin{table}[h!]
+\centering
+\footnotesize
+\begin{tabular}{@{}L{5.4cm}L{3.0cm}L{4.4cm}@{}}
+\toprule
+Import & Site & Status in current versions \\
+\midrule
+\texttt{mjlab.utils.lab\_api.rl.exporter\allowbreak.export\_policy\_as\_onnx}
+  & \texttt{rl/exporter.py}
+  & module tree deleted by mjlab commit \texttt{7afd6303} (``Replace custom ONNX exporter with rsl-rl 4.0 \texttt{as\_onnx()}'') \\
+\texttt{mjlab.rl.exporter\_utils\allowbreak.export\_policy\_as\_onnx}
+  & \texttt{rl/exporter.py} (fallback)
+  & absent; that module defines only \texttt{list\_to\_csv\_str}, \texttt{get\_base\_metadata}, \texttt{attach\_metadata\_to\_onnx} \\
+\texttt{mjlab.viewer.viser.conversions}
+  & \texttt{viewer\_helpers.py}, \texttt{scripts/play.py}
+  & module absent in 1.4.0 \\
+\texttt{self.logger\_type}
+  & \texttt{rl/runner.py}
+  & moved to \texttt{self.logger.logger\_type} in rsl-rl 5.x \\
+\texttt{self.disable\_logs}
+  & \texttt{rl/runner.py}
+  & moved to \texttt{self.logger.disable\_logs} \\
+\texttt{self.alg.policy}
+  & \texttt{rl/runner.py}
+  & rsl-rl 5.x exposes \texttt{self.alg.get\_policy()} \\
+\texttt{actor\_obs\_normalization}, \texttt{actor\_obs\_normalizer}
+  & \texttt{rl/runner.py}
+  & renamed to \texttt{obs\_normalization} / \texttt{obs\_normalizer} on \texttt{MLPModel} \\
+\bottomrule
+\end{tabular}
+\caption{Verified incompatibilities with mjlab 1.4.0 / rsl-rl-lib 5.2.0.}
+\end{table}
+
+\paragraph{The failure is not graceful.} Both ONNX import paths fail, so
+\texttt{export\_policy\_as\_onnx} degrades to a stub that raises \texttt{ImportError} ---
+recoverable, since the caller catches it. More seriously,
+\texttt{MyoSuiteOnPolicyRunner.save()} guards its export block with
+
+\begin{lstlisting}
+super().save(path, infos)
+if self.logger_type in ["wandb"]:   # <-- outside the try/except
+  try:
+    ...
+\end{lstlisting}
+
+\noindent
+Because \texttt{logger\_type} is read \emph{outside} the surrounding
+\texttt{try}, and no longer exists on \texttt{OnPolicyRunner} in rsl-rl 5.x, the first
+checkpoint save raises \texttt{AttributeError} rather than skipping export. Training would
+fail at the first save interval, not at startup.
+
+\subsection{Assessment}
+
+\begin{itemize}[leftmargin=1.4em,itemsep=0.3em]
+\item \textbf{It is a learner swap with an ONNX bolt-on, not an infrastructure upgrade.}
+The implicit premise --- that MyoSuite lacks GPU training infrastructure and mjlab supplies
+it --- does not hold: MyoSuite already had a Brax/Playground MJX trainer with W\&B and
+published benchmarks. What actually changes is Brax PPO $\to$ rsl-rl PPO, plus viewers and
+export, while parallelism is unchanged or worse.
+
+\item \textbf{Not usable as-is} against mjlab 1.4.0. It is pinned to a pre-1.0.0 mjlab
+commit and to \texttt{rsl-rl-lib} 3.1.0, two major versions behind. Because
+\texttt{pyproject.toml} declares mjlab without a version bound while \texttt{uv.lock}
+pins a commit, a fresh \texttt{uv sync} reproduces the old pin but \texttt{pip install -e .}
+would pull current mjlab and break. Reviving it means either pinning mjlab to
+\texttt{46f17fbe} (losing 5 months of mjlab development, including the muscle-actuator and
+delay-model work) or porting roughly seven call sites forward.
+
+\item \textbf{Architecturally it solves a different problem than the one posed here.} It
+brings MyoSuite's environments to mjlab's \emph{trainer}. It does not bring musculoskeletal
+models into mjlab's \emph{MDP}, so it confers none of the observation-corruption,
+latency, randomisation, or curriculum machinery. For a project whose goal is a deployable
+controller under realistic sensing, that is the wrong half of mjlab to inherit.
+
+\item \textbf{It is nonetheless useful prior art} in two specific respects: the
+\texttt{VecEnv} adaptation pattern in \texttt{wrapper.py}, and the ONNX metadata fallback,
+which is the only existing demonstration of exporting a muscle-actuated policy through
+mjlab's tooling. It is also the only route to \texttt{rsl\_rl} specifically --- relevant
+because \texttt{rsl\_rl} is the sole stack among all those compared here that ships
+student/teacher distillation (Section~\ref{sec:distill}).
+
+\item \textbf{A native port remains the better path} for MSK work that wants mjlab's
+strengths: load the MJCF through \texttt{XmlActuatorCfg} with tendon transmission, drive it
+with \texttt{TendonEffortAction}, and express the imitation MDP as mjlab manager terms.
+That keeps the observation pipeline and the self-describing ONNX export, at the cost of
+rewriting the task definition.
+\end{itemize}
+
+% =====================================================================
+\section{Scale and compute}
+
+\begin{table}[h!]
+\centering
+\small
+\begin{tabular}{@{}lL{2.9cm}L{2.9cm}L{3.4cm}@{}}
+\toprule
+ & \textcolor{mmC}{MuscleMimic} & \textcolor{mjC}{mjlab} & \textcolor{qfC}{Qflex} \\
+\midrule
+Parallel envs & 8192 (GPU) & 4096 (GPU) & 8 (CPU processes) \\
+Throughput & $1.3\times10^4$ steps/s (H100) & comparable & CPU-bound \\
+Total steps & $10^9$ & $\sim\!10^8$--$10^9$ & $5\times10^6$ \\
+Wall clock & $\approx$20\,h, 1 GPU & minutes--hours & hours \\
+Batch structure & 20 steps $\times$ 8192 envs, 128 minibatches & configurable & 256 from replay \\
+Hardware floor & NVIDIA GPU & NVIDIA GPU & \textbf{none} \\
+\bottomrule
+\end{tabular}
+\caption{Compute. The $200\times$ step-budget gap between MuscleMimic and Qflex is the
+clearest quantitative expression of on-policy throughput versus off-policy efficiency.}
+\end{table}
+
+% =====================================================================
+\section{Implications for distillation and deployment}
+\label{sec:distill}
+
+For a workflow that ends in a prosthesis-specific controller running on embedded hardware
+with limited, noisy, delayed observations, the three differ sharply.
+
+\begin{enumerate}[leftmargin=1.4em,itemsep=0.4em]
+\item \textbf{Only mjlab has a distillation path.} \texttt{rsl\_rl} 5.2.0 ships
+\texttt{algorithms/distillation.py} (student/teacher \texttt{MLPModel}, MSE or Huber loss,
+\texttt{gradient\_length} for BPTT through recurrent students) and
+\texttt{runners/distillation\_runner.py}, together with \texttt{resolve\_obs\_groups} for
+giving student and teacher genuinely different observation sets. mjlab itself does
+\emph{not} wire this up --- the only references are a changelog line and an aspirational
+sentence in \texttt{motivation.rst} --- so it is a thin subclass plus config, not a
+working feature. MuscleMimic and Qflex have nothing.
+
+\item \textbf{Only mjlab models realistic sensing.} A prosthesis controller must tolerate
+encoder quantisation, IMU noise, and variable latency. mjlab's per-term noise and delay
+configuration expresses exactly this. MuscleMimic can restrict \emph{which} observations
+the actor sees, but cannot corrupt or delay them.
+
+\item \textbf{Only mjlab emits a deployable artifact,} as established in
+Section~\ref{sec:outputs}.
+
+\item \textbf{Qflex is the most interesting algorithm for the hardest regime.} If the
+binding constraint becomes exploration in a 400--700 dimensional muscle action space
+rather than throughput --- for instance when learning a novel prosthetic gait with no
+reference motion --- Qflex's value-guided flow is the only one of the three that
+addresses it directly, and it does so without dimensionality reduction. Its own results
+report the advantage widening precisely as over-actuation increases.
+
+\item \textbf{MuscleMimic remains the best teacher-producer.} It is the only one with
+validated MSK embodiments, a retargeted corpus, and a generalist policy --- which is what
+one distils \emph{from}.
+\end{enumerate}
+
+\paragraph{A plausible division of labour.} Train the generalist musculoskeletal teacher
+in MuscleMimic, where the models, datasets, and reward shaping already work. Use mjlab as
+the distillation and deployment target for prosthesis-specific and human-specific students
+under realistic observation models. That reduces the JAX$\rightarrow$PyTorch boundary to a
+one-time weight-and-contract transfer for an MLP, rather than a reimplementation of the
+training stack. Borrow from Qflex if and when exploration, not throughput, becomes the
+bottleneck.
+
+\paragraph{Cheapest decisive experiment.} Load an existing MSK model into a bare mjlab
+\texttt{Entity} with \texttt{XmlActuatorCfg(transmission\_type=TENDON)}, step it with zero
+actions, and compare a few hundred steps of \texttt{qpos} against MuscleMimic's CPU MuJoCo
+path. That single test exercises the MuJoCo version gap (3.4 versus 3.8), muscle-kernel
+agreement, and the contact budget together.
+
+% =====================================================================
+\appendix
+\section{Verification}
+
+Every claim above was checked against the source trees rather than documentation.
+Representative commands:
+
+\begin{lstlisting}
+# mjlab has no JAX
+grep -rn "import jax" mjlab/src mjlab/tests        # zero hits
+ls mjlab/.venv/lib/python3.13/site-packages/jax    # does not exist
+
+# MuscleMimic and Qflex have no ONNX
+find musclemimic -name '*.onnx' -not -path './.venv/*' | wc -l   # 0
+find Qflex       -name '*.onnx' | wc -l                          # 0
+
+# PureJaxRL lineage in the PPO pair
+grep -rn "unroll=16"         loco-mujoco/loco_mujoco/algorithms/
+grep -rn "_update_minbatch"  loco-mujoco/loco_mujoco/algorithms/
+
+# rsl_rl distillation exists but mjlab never calls it
+ls  mjlab/.venv/lib/python3.13/site-packages/rsl_rl/algorithms/distillation.py
+grep -rn "Distillation" mjlab/src                  # no code hits
+
+# Qflex physics is CPU MuJoCo
+grep -rn "mjx\|mujoco_warp\|warp" Qflex/relax Qflex/requirements   # zero hits
+grep -n  "SharedMemory" Qflex/relax/env/vector/process1.py
+
+# MS-Human-700 dimensions
+python -c "import mujoco; m=mujoco.MjModel.from_xml_path(
+  'Qflex/envs/ms_700_walk/MS-Human-700/MS-Human-700.xml');
+  print(m.nq, m.nu, m.na, m.ntendon)"             # 85 700 700 700
+\end{lstlisting}
+
+\paragraph{Version pins at time of writing.}
+MuscleMimic: \texttt{jax==0.7.2}, \texttt{flax==0.12.0}, \texttt{mujoco==3.4.0},
+\texttt{mujoco-mjx==3.4.0}, \texttt{warp-lang==1.10.0}, \texttt{orbax-checkpoint==0.11.37}.
+mjlab 1.4.0: \texttt{torch>=2.7.0}, \texttt{rsl-rl-lib==5.2.0},
+\texttt{mujoco\textasciitilde{}=3.8.0}, \texttt{mujoco-warp>=3.8.0.3},
+\texttt{warp-lang>=1.12.0}, \texttt{onnxscript>=0.5.4}.
+Qflex (\texttt{relax} 0.1.0): \texttt{jax[cuda12]==0.4.27}, \texttt{dm-haiku},
+\texttt{optax}, \texttt{gymnasium[mujoco]==1.0.0}, \texttt{dill==0.3.8}.
+
+\paragraph{Caveats.} Qflex's \texttt{relax} contains twelve algorithms, of which
+\texttt{flow\_exp.py} is Qflex proper and the remainder are reimplemented baselines;
+statements about ``Qflex'' above refer to \texttt{FlowExp} unless noted. mjlab throughput
+figures are not measured here and are quoted only as comparable in order of magnitude.
+The MuscleMimic paper reports 123 joints / 72 DoF for MyoFullBody; the Qflex paper reports
+206 joints for MS-Human-700 while MuJoCo loads 85 independent DoF --- both discrepancies
+reflect anatomical joints being counted separately from independent coordinates.
+
+\end{document}

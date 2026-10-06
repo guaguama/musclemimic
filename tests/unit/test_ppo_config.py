@@ -93,6 +93,7 @@ class TestGetPpoConfig:
             "ent_coef": 0.01,
             "vf_coef": 0.5,
             "init_std_motors":1.0,
+            "actor_bias_init": "qpos0",
         }
 
         config = OmegaConf.create({

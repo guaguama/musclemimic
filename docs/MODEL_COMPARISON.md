@@ -593,3 +593,76 @@ Caveats worth carrying forward:
   so **hip height and segment lengths are the robust dimensions**; absolute ground clearance is not.
 - Dempster/Winter fractions are population means; a ±1 pp deviation is unremarkable, which is why only
   LM's +2.37 pp thigh is called out.
+
+---
+
+## 9. The official MyoAssist model (`models/new_osl_fullbody`)
+
+Added 2026-08-27. NeuMoVe Lab shipped an official full-body + OSL model, vendored here by
+`scripts/vendor_new_osl_fullbody_model.py` (see `models/new_osl_fullbody/README.md` for
+provenance and the four edits applied). This section records the measurements that justify
+dropping the `mjDSBL_EULERDAMP` workaround the hand-built OSL environments carry.
+
+### 9.1 Old vs new
+
+| | `models/osl_fullbody` (hand-built) | `models/new_osl_fullbody` (official) |
+|---|---|---|
+| nq / nv | 124 / 123 | 120 / 119 |
+| total mass | 82.47310 kg | 82.27817 kg |
+| muscle actuators | 390 | 401 (11 residual-limb muscles retained, 8 re-anchored) |
+| OSL actuators | 2 `<motor gear=…>` | 2 `<general gainprm=49.4/58.4>` — numerically identical |
+| socket | 4 compliant DoFs | rigidly welded |
+| joints with `stiffness` | 4 | 0 (the attribute does not appear in the file) |
+| max `dof_damping` | 10000 (`socket_piston`) | 1.05 (`myoarm` default class) |
+| keyframes | 1 | 5 (`stand`, `walk_left`, `walk_right`, `squat`, `lunge`) |
+| explicit `<pair>` contacts | 76 | 46 |
+| OSL mesh geoms | `contype=1 conaffinity=0` | `contype=1 conaffinity=1` |
+| touch sensors | `r_osl_foot`, `l_foot`, `l_toes` + 2 load cells | `r_foot`, `r_toes`, `l_foot`, `l_toes` |
+| floor / light / skybox | included | none — supplied by our scene at vendoring time |
+
+### 9.2 Euler damping is a property of the socket, not the prosthesis
+
+The explicit-Euler stability bound on a damped DoF is `dof_damping · dt / M_ii < 2`. At the
+2 ms timestep training actually uses (`OSLFullBody.__init__` defaults to 0.002 regardless of
+the XML's 1 ms):
+
+| model | worst ratio @ 2 ms | offender |
+|---|---|---|
+| `osl_fullbody` (hand-built) | **13.87** | `socket_rotation_3` |
+| " | 3.71 | `socket_piston` |
+| `new_osl_fullbody` (rigid) | **0.995** | `ip_flexion_r` (a finger joint, deleted by `disable_fingers`) |
+| " excluding fingers | 0.73 | `cmc_abduction` |
+| `new_osl_fullbody_compliant_socket` | **15.68** | `socket_rotation_3` |
+
+Confirmed by simulation rather than inferred from the bound. CPU MuJoCo, Euler, 2 ms, 3000
+steps from `stand` with `mjDSBL_EULERDAMP` set: the hand-built model diverges at step 54; the
+rigid official model records zero `mjWARN_BADQACC`; the compliant variant warns at
+t = 0.016 s. Note the compliant variant's `qvel` stays *finite* the whole time — MuJoCo clamps
+`qacc` on instability — so a finiteness check is not a valid detector here.
+
+Confirmed again on the real Warp backend (`mjx.put_model(..., impl="warp")`, RTX 4090,
+2000 steps at 2 ms with random muscle excitation), which is where the original NaN was seen:
+
+| model | `mjDSBL_EULERDAMP` set | result |
+|---|---|---|
+| `new_osl_fullbody` | yes | finite, peak speed 12.8 rad/s |
+| `new_osl_fullbody_compliant_socket` | yes | **NaN by step 100** |
+| `new_osl_fullbody_compliant_socket` | no | finite, peak speed 3.4 rad/s |
+
+So `MjxNewOSLFullBody` can inherit `MjxMyoFullBody`'s `disableflags=mjDSBL_EULERDAMP` with the
+rigid socket, and must drop it only when the compliant socket is selected. This does **not**
+relax §7's rule 3 for the robot model: `mjDSBL_EULERDAMP` makes `dof_damping` implicit but
+never covered an actuator's `biasprm[2]`, so servo `Kd` still has to come from `2ζ√(Kp·I_eff)`.
+
+Peak contact count on the rigid model at 2 ms was 22 (Warp) / 27 (CPU) over 1000–2000 steps,
+well inside the `nconmax = 96` per-env budget hardcoded at `myofullbody.py:422`, despite the
+official model's `conaffinity=1` OSL mesh geoms producing more candidate pairs than ours.
+
+### 9.3 Reproduction
+
+```bash
+.venv/bin/python scripts/vendor_new_osl_fullbody_model.py --check
+.venv/bin/python -m pytest tests/unit/test_new_osl_fullbody_model.py -v
+CUDA_VISIBLE_DEVICES=0 .venv/bin/python -m pytest \
+    tests/unit/test_new_osl_fullbody_model.py -m integration -v   # the Warp table above
+```
