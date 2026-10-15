@@ -1,8 +1,7 @@
 # Neutral actor output initialization
 
-`actor_bias_init` is **opt-in**: the code default is `none`, and the two robot
-configs (`fullbody/conf_osl_fullbody_robot.yaml`,
-`fullbody/conf_new_osl_fullbody_robot.yaml`) set `qpos0` explicitly. The
+`actor_bias_init` is **opt-in**: the code default is `none`, and the robot
+config (`fullbody/conf_osl_fullbody_robot.yaml`) sets `qpos0` explicitly. The
 eligibility test is purely structural, so a code-level default would silently
 activate on any future config whose model happened to match; enabling it per
 config keeps that choice deliberate. Where enabled, eligible direct
@@ -19,7 +18,7 @@ actual mean and half-width. Only fixed-gain, affine-bias hinge/slide joint
 actuators without activation dynamics are eligible. Incremental controllers are
 excluded. Invalid or degenerate actuator coefficients are skipped.
 
-Both robot configs already carry the key, so override it without a `+`:
+The robot config already carries the key, so override it without a `+`:
 
 ```bash
 experiment.ppo_config.actor_bias_init=none
@@ -38,7 +37,11 @@ not prevent clipping of Gaussian samples.
 
 ## Verification
 
-Verified on 2026-09-15. The original-code baseline passed 593 tests, with 25
+Verified on 2026-09-15, on the two OSL models then in the repo: the hand-assembled
+model ("legacy") and the myo_sim 0.2.2 export ("new"). Both now live on the
+`old_osl` branch. The current v3 model shares the new model's joint names and
+servo coordinates; its bias vectors are covered by `tests/unit/test_actor_bias_init.py`,
+but the survival measurements below were not repeated on it. The original-code baseline passed 593 tests, with 25
 skipped and 19 deselected. After implementation, `make test` passed 651 tests,
 with the same skip/deselection counts. The focused PPO/config/initialization
 suite passed 96 tests. Both suites emitted one existing JAXopt deprecation
@@ -71,7 +74,6 @@ training, followed by a fresh training smoke. Run each model in a separate
 process on a GPU with the configured trajectory files available:
 
 ```bash
-.venv/bin/python scripts/verify_actor_bias_init.py --model legacy
 .venv/bin/python scripts/verify_actor_bias_init.py --model rigid
 .venv/bin/python scripts/verify_actor_bias_init.py --model compliant
 ```

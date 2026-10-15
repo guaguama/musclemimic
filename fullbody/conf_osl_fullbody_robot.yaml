@@ -1,6 +1,26 @@
-# Position-controlled OSL full-body robot variant.  Inherit the complete OSL
-# trajectory, goal, reward, termination, Warp, validation, and PPO schedule and
-# override only settings that differ for the 29 stateless robot actuators.
+# Position-controlled robot variant of the MyoAssist OSL full-body model (v3).
+# Inherits the complete trajectory, goal, reward, termination, Warp, validation and
+# PPO schedule from conf_osl_fullbody and overrides only what differs for the 29
+# stateless robot actuators.
+#
+# Socket toggle: inherited whole from conf_osl_fullbody -- compliant_socket picks
+# between osl_fullbody_robot.xml (nq 80) and
+# osl_fullbody_robot_compliant_socket.xml (nq 84), and disable_eulerdamp still
+# tracks `not compliant_socket` unless set explicitly.  Toggle on the CLI with
+#   experiment.env_params.compliant_socket=true
+# NOTE the toggle changes nq/nv and therefore the observation size -- checkpoints do
+# not transfer across it.
+#
+# Both variants are driven by ONE servo table, derived once on the rigid model.  That
+# is safe rather than exact: the compliant socket lowers right-hip effective inertia
+# by up to 50%, so those three coordinates run at zeta 1.08-1.43 instead of 1.
+# Measured worst Kd*dt/I is 0.600 on both variants against an Euler bound of 2.0.
+#
+# disable_fingers is inherited as true and stays a harmless no-op: the robot models
+# already have the finger joints removed, and the env's deletion matches by name.
+#
+# Usage:
+#   uv run fullbody/experiment.py --config-name=conf_osl_fullbody_robot
 defaults:
   - conf_osl_fullbody
   - _self_

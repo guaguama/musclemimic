@@ -274,7 +274,7 @@ class MetricsHandler:
         """
         # Match get_zero_container's per-quantity shape so the _evaluation_step and
         # _skip_evaluation branches of jax.lax.cond yield identical structures for
-        # arm-less envs (e.g. MyoLeg80_OSL_KA). Without this, enabled quantities
+        # arm-less envs (e.g. lower-body-only models). Without this, enabled quantities
         # would emit float32[0] here vs float32[] in the skip branch.
         if self._left_arm_site_indices is None or self._right_arm_site_indices is None:
             zero_container = self.get_zero_container().euclidean_distance

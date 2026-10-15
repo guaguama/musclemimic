@@ -537,6 +537,8 @@ That last point is worth flagging as a risk: because upstream's regression tests
 
 For orientation, `git diff upstream/main..HEAD` (i.e. `5d4c8af..6561833`) — your changes on top of amathislab/musclemimic:
 
+Note (2026-10-14): this snapshot predates the v3 OSL model. The MyoLeg80 OSL model, the hand-assembled `osl_fullbody`, the `new_osl_fullbody` export, and the tooling built only for them (`diagnose_osl_ka_episode_length.py`, `benchmark_training_speed.py`, `tune_osl_fullbody_robot.py`, `project_gmr_cache_to_osl_ka.py`) now live on the `old_osl` branch. `dev` carries only the v3 model under the `osl_fullbody` names.
+
 **159 files, +19,270 lines** total; of that, **+6,110 / −76 lines of Python** across 33 files. The bulk of the non-Python delta is the `models/myoLeg80_OSL_KA/` mesh and XML assets.
 
 New environments (`musclemimic/environments/humanoids/`):

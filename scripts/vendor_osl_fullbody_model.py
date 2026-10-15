@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Vendor the official MyoAssist full-body + OSL export into models/new_osl_fullbody/.
+"""Vendor the MyoAssist full-body + OSL export into models/osl_fullbody/.
 
-The source is an ad-hoc local artifact produced by the ``assist_sim`` CLI::
+The source is a local artifact of the myoassist checkout, produced by the
+``assist_sim`` CLI with myo_sim 0.2.3 and then hand edited::
 
     cd <myoassist repo>
     python -m assist_sim combine myofullbody OpenSourceLeg_KA_L1 \
-        -o models/myofullbody_osl_ka.xml
+        -o models/osl_fullbody_v3.xml
+
+The hand edit lengthens the OSL tibial pylon by 22.5 mm so the prosthetic leg
+matches the intact leg.  The comment block at the top of the source records the
+exact edit; it is kept verbatim in the vendored files.
 
 ``assist_sim.utils.export_combined_xml`` rewrites mesh paths relative to the
 *output* file and strips ``meshdir``, so re-exporting straight into this repo
@@ -21,28 +26,28 @@ perturb inertias):
    ``meshdir="../meshes"`` is added to the existing ``<compiler>``; the 76
    unique STLs are copied into ``meshes/``.  ``texturedir`` is deliberately not
    set: the scene's skybox is referenced bare and MuJoCo resolves it against the
-   *including* file's directory, which is how models/osl_fullbody/ already works.
+   *including* file's directory.
 2. The export's builtin ``<texture name="sky" builtin="gradient">`` is deleted.
    It is not cosmetic -- the scene declares a file-backed texture of the same
    name, and duplicate texture names are a hard compile error.
 3. The exporter's ``<visual>`` boilerplate (``_ensure_minimal_visual``) is
-   deleted so the scene's headlight/haze/camera values win outright, matching
-   the look of the existing OSL model.
+   deleted so the scene's headlight/haze/camera values win outright.
 4. ``<include file="../scene/musclemimic_scene.xml"/>`` supplies the floor,
-   light, and skybox the export does not ship.
+   light, and skybox the export does not ship.  The scene files are tracked in
+   ``models/osl_fullbody/scene/`` and are not regenerated; this script only
+   checks that they are present.
 
 Two model files are emitted.
 --------------------------
 
-``new_osl_fullbody.xml`` is the official rigid-socket topology (nq 120).
-``new_osl_fullbody_compliant_socket.xml`` additionally restores the four
-compliant socket DoFs from the hand-built model
-(``models/osl_fullbody/leg/assets/myolegs_chain.xml``).  The transplant is
-exact, not approximate: in both models the socket body is a direct child of
-``femur_r`` with no ``quat`` and an identical ``<inertial>``, and all four
-joints sit at ``pos="0 0 0"``, so the axis vectors carry over verbatim.
-``armature="0.01"`` is stated explicitly because the official model's socket
-body inherits no ``myolegs`` default class.
+``osl_fullbody.xml`` is the official rigid-socket topology (nq 120).
+``osl_fullbody_compliant_socket.xml`` additionally restores the four compliant
+socket DoFs of the hand-assembled model (now on the ``old_osl`` branch), spelled
+out in ``SOCKET_JOINTS``.  The transplant is exact, not approximate: in both
+models the socket body is a direct child of ``femur_r`` with no ``quat`` and an
+identical ``<inertial>``, and all four joints sit at ``pos="0 0 0"``, so the axis
+vectors carry over verbatim.  ``armature="0.01"`` is stated explicitly because
+the official model's socket body inherits no ``myolegs`` default class.
 
 Why two files instead of one file plus a runtime toggle: the export ships five
 keyframes, and deleting a joint from a spec that has keyframes fails to compile
@@ -53,9 +58,9 @@ The two variants are a coupled toggle with ``mjDSBL_EULERDAMP``.  At the 2 ms
 timestep training uses, the rigid model's worst ``dof_damping * dt / M_ii`` is
 0.995 (a finger joint) -- inside the explicit-Euler bound of 2, so Euler damping
 may be disabled.  With the socket restored, ``socket_rotation_3`` reaches 15.68
-and the model raises ``mjWARN_BADQACC`` at t = 0.018 s unless Euler damping stays
-implicit.  That is the same failure the hand-built OSL environments worked
-around, and it belongs to the socket, not to the prosthesis.
+and the model raises ``mjWARN_BADQACC`` on the first step from key ``stand``
+unless Euler damping stays implicit.  The failure belongs to the socket, not to
+the prosthesis.
 """
 
 from __future__ import annotations
@@ -72,18 +77,17 @@ import mujoco
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE_XML = Path(
-    "/home/dmma/src/00_AMBER/01_projpegleg/myoassist/models/myofullbody_osl_ka.xml"
+    "/home/dmma/src/00_AMBER/01_projpegleg/myoassist/models/osl_fullbody_v3.xml"
 )
-OUTPUT_ROOT = REPO_ROOT / "models" / "new_osl_fullbody"
-SCENE_SOURCE = REPO_ROOT / "models" / "osl_fullbody" / "scene"
+OUTPUT_ROOT = REPO_ROOT / "models" / "osl_fullbody"
 SCENE_FILES = ("musclemimic_scene.xml", "musclemimic_skybox.png")
 
-MODEL_NAME = "NewOSLFullBody"
-RIGID_XML = OUTPUT_ROOT / "body" / "new_osl_fullbody.xml"
-COMPLIANT_XML = OUTPUT_ROOT / "body" / "new_osl_fullbody_compliant_socket.xml"
+MODEL_NAME = "OSLFullBody"
+RIGID_XML = OUTPUT_ROOT / "body" / "osl_fullbody.xml"
+COMPLIANT_XML = OUTPUT_ROOT / "body" / "osl_fullbody_compliant_socket.xml"
 
 BANNER = (
-    "  <!-- Generated by scripts/vendor_new_osl_fullbody_model.py; "
+    "  <!-- Generated by scripts/vendor_osl_fullbody_model.py; "
     "do not edit manually. -->"
 )
 
@@ -92,7 +96,8 @@ SOCKET_BODY = "OSL_KA_L1_osl_generic_socket"
 # in the rigid model are where the socket DoFs land in the compliant one.
 JOINT_AFTER_SOCKET = "OSL_KA_L1_osl_knee_angle_r"
 
-# Transplanted verbatim from models/osl_fullbody/leg/assets/myolegs_chain.xml.
+# Transplanted verbatim from the hand-assembled model's leg/assets/myolegs_chain.xml
+# (old_osl branch).
 # armature is stated explicitly; the official socket body inherits no class.
 SOCKET_JOINTS = (
     '<joint name="socket_piston" type="slide" pos="0 0 0"'
@@ -110,7 +115,7 @@ SOCKET_JOINT_NAMES = ("socket_piston", "socket_rotation_1", "socket_rotation_2",
 # (nq, nv, nu, nbody, neq, na, nkey); na is the 401 muscle activation states
 RIGID_DIMENSIONS = (120, 119, 403, 106, 44, 401, 5)
 COMPLIANT_DIMENSIONS = (124, 123, 403, 106, 44, 401, 5)
-EXPECTED_MASS = 82.27817
+EXPECTED_MASS = 82.28906  # 82.27817 stock export + 10.9 g from the lengthened pylon
 
 
 def _mesh_sources(source_xml: Path) -> dict[str, Path]:
@@ -154,7 +159,11 @@ def _rewrite(source_xml: Path) -> str:
 
     # 4. our floor / light / skybox, plus the model name and the banner
     root = f'<mujoco model="{MODEL_NAME}">'
-    xml = re.sub(r'^<mujoco model="[^"]*">', root, xml, count=1)
+    # The source opens with a provenance comment, so anchor on a line start rather
+    # than the string start; a bare `^` would silently match nothing.
+    xml, renamed = re.subn(r'^<mujoco model="[^"]*">', root, xml, count=1, flags=re.MULTILINE)
+    if renamed != 1:
+        raise RuntimeError("root <mujoco> element not found in the export")
     xml = xml.replace(
         root,
         f'{root}\n{BANNER}\n  <include file="../scene/musclemimic_scene.xml" />',
@@ -242,14 +251,13 @@ def _verify_compliant(model: mujoco.MjModel, qpos_adr: int) -> None:
 
 
 def _copy_assets(sources: dict[str, Path], check: bool) -> list[str]:
-    """Copy meshes and the scene; in check mode report what differs instead."""
+    """Copy meshes; in check mode report what differs instead.
+
+    The scene is tracked in place and never copied (see the module docstring).
+    """
     stale: list[str] = []
     meshes = OUTPUT_ROOT / "meshes"
-    scene = OUTPUT_ROOT / "scene"
-    wanted = {
-        **{meshes / name: path for name, path in sources.items()},
-        **{scene / name: SCENE_SOURCE / name for name in SCENE_FILES},
-    }
+    wanted = {meshes / name: path for name, path in sources.items()}
     if check:
         for destination, origin in wanted.items():
             if not destination.is_file() or not filecmp.cmp(destination, origin, shallow=False):
@@ -259,7 +267,6 @@ def _copy_assets(sources: dict[str, Path], check: bool) -> list[str]:
         return stale
 
     meshes.mkdir(parents=True, exist_ok=True)
-    scene.mkdir(parents=True, exist_ok=True)
     for destination, origin in wanted.items():
         shutil.copyfile(origin, destination)
     for path in meshes.glob("*"):
@@ -299,8 +306,8 @@ def main() -> int:
     # compliant one derives its keyframe offsets from a compile of the rigid one.
     sources = _mesh_sources(args.source)
     stale_assets = _copy_assets(sources, check=args.check)
-    if args.check and not all((OUTPUT_ROOT / "scene" / n).is_file() for n in SCENE_FILES):
-        print("out of date: models/new_osl_fullbody/scene is missing", file=sys.stderr)
+    if not all((OUTPUT_ROOT / "scene" / n).is_file() for n in SCENE_FILES):
+        print("models/osl_fullbody/scene is missing; it is tracked, not generated", file=sys.stderr)
         return 1
 
     rigid, compliant = build(args.source)
@@ -321,7 +328,7 @@ def main() -> int:
         if stale:
             print("out of date:\n  " + "\n  ".join(stale), file=sys.stderr)
             return 1
-        print("models/new_osl_fullbody is up to date")
+        print("models/osl_fullbody is up to date")
         return 0
 
     RIGID_XML.write_text(rigid, encoding="utf-8")

@@ -94,8 +94,8 @@ class ValidationVideoRecorder:
             if sites:
                 env_params["goal_params"]["sites_for_mimic"] = sites
         elif "MyoFullBody" in env_name or "MyoLeg" in env_name or "OSLFullBody" in env_name:
-            # MyoFullBody and MyoLeg variants (e.g. MyoLeg80_OSL_KA), plus the
-            # OSLFullBody fullbody+prosthesis model, use GoalTrajMimicv2 (full blue
+            # MyoFullBody and MyoLeg variants, plus the OSLFullBody
+            # fullbody+prosthesis model, use GoalTrajMimicv2 (full blue
             # ghost). "OSLFullBody" matches neither prior substring, so it needs its
             # own term — same naming pitfall as the site-mapper branch.
             env_params["goal_type"] = "GoalTrajMimicv2"

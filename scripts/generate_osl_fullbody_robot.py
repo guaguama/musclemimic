@@ -83,174 +83,78 @@ from dataclasses import dataclass
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SOURCE_XML = REPO_ROOT / "models" / "osl_fullbody" / "body" / "osl_fullbody.xml"
-OUTPUT_XML = REPO_ROOT / "models" / "osl_fullbody" / "body" / "osl_fullbody_robot.xml"
+_BODY = REPO_ROOT / "models" / "osl_fullbody" / "body"
+SOURCE_XML = _BODY / "osl_fullbody.xml"
+OUTPUT_XML = _BODY / "osl_fullbody_robot.xml"
 ASSET_ROOT = SOURCE_XML.parents[1]
 
-# Keep this list in lockstep with MyoFullBody._apply_spec_changes.  Deleting a
-# joint leaves the hand bodies in place, which is how the existing fingerless
-# OSL environment preserves body/mass topology while reducing nq/nv.
-FINGER_JOINTS = (
-    "cmc_flexion_r",
-    "cmc_abduction_r",
-    "mp_flexion_r",
-    "ip_flexion_r",
-    "mcp2_flexion_r",
-    "mcp2_abduction_r",
-    "mcp3_flexion_r",
-    "mcp3_abduction_r",
-    "mcp4_flexion_r",
-    "mcp4_abduction_r",
-    "mcp5_flexion_r",
-    "mcp5_abduction_r",
-    "md2_flexion_r",
-    "md3_flexion_r",
-    "md4_flexion_r",
-    "md5_flexion_r",
-    "pm2_flexion_r",
-    "pm3_flexion_r",
-    "pm4_flexion_r",
-    "pm5_flexion_r",
-    "cmc_flexion_l",
-    "cmc_abduction_l",
-    "mp_flexion_l",
-    "ip_flexion_l",
-    "mcp2_flexion_l",
-    "mcp2_abduction_l",
-    "mcp3_flexion_l",
-    "mcp3_abduction_l",
-    "mcp4_flexion_l",
-    "mcp4_abduction_l",
-    "mcp5_flexion_l",
-    "mcp5_abduction_l",
-    "md2_flexion_l",
-    "md3_flexion_l",
-    "md4_flexion_l",
-    "md5_flexion_l",
-    "pm2_flexion_l",
-    "pm3_flexion_l",
-    "pm4_flexion_l",
-    "pm5_flexion_l",
-)
-
 # (joint name, Kp, Kd, absolute actuator force limit).  Values are verbatim output of
-# scripts/analyze_osl_fullbody_robot_actuators.py -- see this module's docstring for the
-# three rules that produce them.  Regenerate rather than hand-editing: gainprm encodes
-# Kp * half_range, so editing a Kp in the XML alone silently rescales that joint's
-# normalized action semantics.
+#   scripts/analyze_osl_fullbody_robot_actuators.py --model osl_fullbody
+# (recorded in scripts/osl_fullbody_robot_actuator_candidate.json) -- see this
+# module's docstring for the three rules that produce them.  Regenerate rather than
+# hand-editing: gainprm encodes Kp * half_range, so editing a Kp in the XML alone
+# silently rescales that joint's normalized action semantics.
 POSITION_SERVOS = (
     # Torso.
-    ("flex_extension",       871.4,  68.54,  305.0),
-    ("lat_bending",         1228.6,  87.52,  430.0),
-    ("axial_rotation",       771.4,  30.21,  270.0),
+    ("flex_extension",          871.4,  68.89,  305.0),
+    ("lat_bending",            1228.6,  90.77,  430.0),
+    ("axial_rotation",          771.4,  30.30,  270.0),
     # Right arm.
-    ("elv_angle_r",          442.9,  38.73,  155.0),           # 0 N*m at qpos0 alone (gimbal singularity)
-    ("shoulder_elv_r",       314.3,  37.57,  110.0),
-    ("shoulder_rot_r",       121.6,   1.62,   90.0),
-    ("elbow_flex_r",         242.9,   6.20,   85.0),
-    ("pro_sup_r",             42.9,   0.64,   15.0),
-    ("deviation_r",           68.6,   0.91,   35.0),
-    ("flexion_r",             81.0,   1.08,   40.0),
+    ("elv_angle_r",             442.9,  38.70,  155.0),         # 0 N*m at qpos0 alone (gimbal singularity)
+    ("shoulder_elv_r",          314.3,  37.50,  110.0),
+    ("shoulder_rot_r",          109.8,   1.46,   90.0),         # Kp bandwidth-capped at wn=150
+    ("elbow_flexion_r",         242.9,   5.35,   85.0),
+    ("pro_sup_r",                42.9,   0.61,   15.0),
+    ("deviation_r",              58.0,   0.77,   35.0),         # Kp bandwidth-capped at wn=150
+    ("flexion_r",                70.6,   0.94,   40.0),         # Kp bandwidth-capped at wn=150
     # Left arm -- identical to the right: both sizing poses are bilaterally
     # symmetric, so every pair falls out equal with no manual symmetrization.
-    ("elv_angle_l",          442.9,  38.73,  155.0),           # 0 N*m at qpos0 alone (gimbal singularity)
-    ("shoulder_elv_l",       314.3,  37.57,  110.0),
-    ("shoulder_rot_l",       121.6,   1.62,   90.0),
-    ("elbow_flex_l",         242.9,   6.20,   85.0),
-    ("pro_sup_l",             42.9,   0.64,   15.0),
-    ("deviation_l",           68.6,   0.91,   35.0),
-    ("flexion_l",             81.0,   1.08,   40.0),
-    # Residual right hip.  Genuinely weaker than the left -- the amputation removes
-    # muscles crossing this hip -- so do NOT symmetrize these with the left leg.
-    ("hip_flexion_r",        814.3,  22.78,  285.0),
-    ("hip_adduction_r",      671.4,  23.15,  235.0),
-    ("hip_rotation_r",       457.1,  10.61,  160.0),
+    ("elv_angle_l",             442.9,  38.70,  155.0),         # 0 N*m at qpos0 alone (gimbal singularity)
+    ("shoulder_elv_l",          314.3,  37.50,  110.0),
+    ("shoulder_rot_l",          109.8,   1.46,   90.0),         # Kp bandwidth-capped at wn=150
+    ("elbow_flexion_l",         242.9,   5.35,   85.0),
+    ("pro_sup_l",                42.9,   0.61,   15.0),
+    ("deviation_l",              58.0,   0.77,   35.0),         # Kp bandwidth-capped at wn=150
+    ("flexion_l",                70.6,   0.94,   40.0),         # Kp bandwidth-capped at wn=150
+    # Residual right hip.  The official export keeps enough hip musculature that
+    # flexion matches the intact side -- these are NOT symmetrized, they simply
+    # came out near-equal.
+    ("hip_flexion_r",          1600.0,  32.09,  560.0),
+    ("hip_adduction_r",        1157.1,  39.54,  405.0),
+    ("hip_rotation_r",          485.7,   8.63,  170.0),
     # Intact left leg.
-    ("hip_flexion_l",       1600.0,  34.16,  560.0),
-    ("hip_adduction_l",     1200.0,  39.37,  420.0),
-    ("hip_rotation_l",       528.6,   9.23,  185.0),
-    ("knee_angle_l",        1557.1,  26.99,  545.0),
-    ("ankle_angle_l",        343.8,   4.58,  425.0),           # Kp bandwidth-capped at wn=150
-    ("subtalar_angle_l",     304.6,   4.06,  135.0),
-    ("mtp_angle_l",           14.3,   0.76,    5.0),           # MyoLeg's toe flexors are weak; below human MVC
+    ("hip_flexion_l",          1600.0,  34.41,  560.0),
+    ("hip_adduction_l",        1200.0,  41.23,  420.0),
+    ("hip_rotation_l",          528.6,   9.29,  185.0),
+    ("knee_angle_l",           1257.1,  24.65,  440.0),         # 545 in v2; myo_sim 0.2.3 fixed the left-knee coupling
+    ("ankle_angle_l",           339.3,   4.52,  425.0),         # Kp bandwidth-capped at wn=150
+    ("subtalar_angle_l",        303.3,   4.04,  130.0),         # Kp bandwidth-capped at wn=150
+    ("mtp_angle_l",              14.3,   0.76,    5.0),         # MyoLeg's toe flexors are weak; below human MVC
 )
 
+# Joint names carry the ``OSL_KA_L1_`` namespace of the official export; the actuator
+# names do not.  The export scales force through ``gainprm``; ``gear`` here
+# reproduces it exactly, since force is ``gear * gainprm[0] * ctrl`` either way, so
+# peak torque stays 142.27 / 168.19 N*m at the unchanged +-2.88 ctrlrange.
 OSL_MOTORS = (
-    ("osl_knee_torque_actuator", "osl_knee_angle_r", 49.4),
-    ("osl_ankle_torque_actuator", "osl_ankle_angle_r", 58.4),
+    ("osl_knee_torque_actuator", "OSL_KA_L1_osl_knee_angle_r", 49.4),
+    ("osl_ankle_torque_actuator", "OSL_KA_L1_osl_ankle_angle_r", 58.4),
 )
+
+
+# The official export dropped the ``_r`` suffix on four right-hand joints.  The
+# corrected list already exists for the environment; importing it keeps the two in
+# lockstep by construction.  Imported lazily so this script does not pull in JAX
+# until a profile is actually resolved.
+def _finger_joints() -> tuple[str, ...]:
+    from musclemimic.environments.humanoids.osl_fullbody import _FINGER_JOINTS
+
+    return tuple(_FINGER_JOINTS)
 
 
 # ---------------------------------------------------------------------------
 # Model profiles
 # ---------------------------------------------------------------------------
-# Everything above is the ``osl_fullbody`` profile, kept as module-level names so
-# that existing importers (tests read ``OUTPUT_XML``, ``POSITION_SERVOS`` and
-# ``OSL_MOTORS``) and bare ``--check`` invocations behave exactly as before.  A
-# second model adds a profile rather than editing those.
-
-# Verbatim output of
-#   scripts/analyze_osl_fullbody_robot_actuators.py --model new_osl_fullbody
-# (recorded in scripts/new_osl_fullbody_robot_actuator_candidate.json).  Derived by
-# the same three rules as the table above -- regenerate rather than hand-editing.
-#
-# Only 2 of the 27 coordinates were renamed upstream (elbow_flex -> elbow_flexion),
-# but the NUMBERS are re-derived rather than copied: the official export carries
-# noticeably more musculature on the amputated side, so hip_flexion_r nearly doubles
-# (285 -> 560 N*m) and hip_adduction_r goes 235 -> 405.
-_NEW_POSITION_SERVOS = (
-    # Torso.
-    ("flex_extension",          871.4,  68.91,  305.0),
-    ("lat_bending",            1228.6,  90.69,  430.0),
-    ("axial_rotation",          771.4,  30.36,  270.0),
-    # Right arm.
-    ("elv_angle_r",             442.9,  38.70,  155.0),           # 0 N*m at qpos0 alone (gimbal singularity)
-    ("shoulder_elv_r",          314.3,  37.50,  110.0),
-    ("shoulder_rot_r",          109.8,   1.46,   90.0),           # Kp bandwidth-capped at wn=150
-    ("elbow_flexion_r",         242.9,   5.35,   85.0),
-    ("pro_sup_r",                42.9,   0.61,   15.0),
-    ("deviation_r",              58.0,   0.77,   35.0),           # Kp bandwidth-capped at wn=150
-    ("flexion_r",                70.6,   0.94,   40.0),           # Kp bandwidth-capped at wn=150
-    # Left arm -- identical to the right: both sizing poses are bilaterally
-    # symmetric, so every pair falls out equal with no manual symmetrization.
-    ("elv_angle_l",             442.9,  38.70,  155.0),           # 0 N*m at qpos0 alone (gimbal singularity)
-    ("shoulder_elv_l",          314.3,  37.50,  110.0),
-    ("shoulder_rot_l",          109.8,   1.46,   90.0),           # Kp bandwidth-capped at wn=150
-    ("elbow_flexion_l",         242.9,   5.35,   85.0),
-    ("pro_sup_l",                42.9,   0.61,   15.0),
-    ("deviation_l",              58.0,   0.77,   35.0),           # Kp bandwidth-capped at wn=150
-    ("flexion_l",                70.6,   0.94,   40.0),           # Kp bandwidth-capped at wn=150
-    # Residual right hip.  Unlike the hand-assembled model, the official export keeps
-    # enough hip musculature that flexion matches the intact side (560 vs the old
-    # 285 N*m) -- so these are NOT symmetrized, they simply came out near-equal.
-    ("hip_flexion_r",          1600.0,  32.09,  560.0),
-    ("hip_adduction_r",        1157.1,  39.21,  405.0),
-    ("hip_rotation_r",          485.7,   8.63,  170.0),
-    # Intact left leg.
-    ("hip_flexion_l",          1600.0,  34.33,  560.0),
-    ("hip_adduction_l",        1200.0,  40.97,  420.0),
-    ("hip_rotation_l",          528.6,   9.21,  185.0),
-    ("knee_angle_l",           1557.1,  26.99,  545.0),
-    ("ankle_angle_l",           340.5,   4.54,  425.0),           # Kp bandwidth-capped at wn=150
-    ("subtalar_angle_l",        303.3,   4.04,  135.0),           # Kp bandwidth-capped at wn=150
-    ("mtp_angle_l",              14.3,   0.76,    5.0),           # MyoLeg's toe flexors are weak; below human MVC
-)
-
-# Joint names gained the ``OSL_KA_L1_`` namespace upstream; the ACTUATOR names did
-# not.  ``gear`` here reproduces the source's ``gainprm`` scaling exactly -- force
-# is ``gear * gainprm[0] * ctrl`` either way, so peak torque stays 142.27 / 168.19
-# N*m at the unchanged +-2.88 ctrlrange.
-_NEW_OSL_MOTORS = tuple(
-    (name, f"OSL_KA_L1_{joint}", gear) for name, joint, gear in OSL_MOTORS
-)
-
-# The official export dropped the ``_r`` suffix on four right-hand joints, so the
-# list above reaches only 36 of 40 against it.  The corrected list already exists
-# for the environment; importing it keeps the two in lockstep by construction.
-def _new_finger_joints() -> tuple[str, ...]:
-    from musclemimic.environments.humanoids.new_osl_fullbody import _FINGER_JOINTS
-
-    return tuple(_FINGER_JOINTS)
 
 
 @dataclass(frozen=True)
@@ -271,50 +175,39 @@ class ModelProfile:
 
 
 DEFAULT_MODEL = "osl_fullbody"
-_NEW_BODY = REPO_ROOT / "models" / "new_osl_fullbody" / "body"
 
 MODELS: dict[str, ModelProfile] = {
+    # Both socket variants share ONE servo table: the analysis is run once, on the
+    # rigid model.  That is safe rather than exact -- the compliant socket lowers
+    # effective inertia at the right hip (up to 50% at hip_adduction_r), so the
+    # shared Kd lands above zeta = 1 there.  Overdamped, not unstable; the robot
+    # tests hold the compliant variant to the explicit-Euler bound instead.
     "osl_fullbody": ModelProfile(
         source_xml=SOURCE_XML,
         output_xml=OUTPUT_XML,
         model_name="OSLFullBodyRobot",
-        finger_joints=FINGER_JOINTS,
+        finger_joints=(),  # filled lazily -- see _resolve
         position_servos=POSITION_SERVOS,
         osl_motors=OSL_MOTORS,
-        dimensions=(84, 83, 78, 104, 44, 29, 0),
-    ),
-    # Both official variants share ONE servo table: the analysis is run once, on
-    # the rigid model.  That is safe rather than exact -- the compliant socket
-    # lowers effective inertia at the right hip by up to 50% (hip_adduction_r
-    # 0.3322 -> 0.1646), so the shared Kd lands at zeta ~ 1.42 there instead of 1.
-    # Overdamped, not unstable: measured worst Kd*dt/I is 0.600 on BOTH variants
-    # (ankle_angle_l) at the 2 ms training timestep, against an Euler bound of 2.0.
-    "new_osl_fullbody": ModelProfile(
-        source_xml=_NEW_BODY / "new_osl_fullbody.xml",
-        output_xml=_NEW_BODY / "new_osl_fullbody_robot.xml",
-        model_name="NewOSLFullBodyRobot",
-        finger_joints=(),  # filled lazily -- see _resolve
-        position_servos=_NEW_POSITION_SERVOS,
-        osl_motors=_NEW_OSL_MOTORS,
         dimensions=(80, 79, 74, 106, 44, 29, 0),
     ),
-    "new_osl_fullbody_compliant_socket": ModelProfile(
-        source_xml=_NEW_BODY / "new_osl_fullbody_compliant_socket.xml",
-        output_xml=_NEW_BODY / "new_osl_fullbody_robot_compliant_socket.xml",
-        model_name="NewOSLFullBodyRobot",
+    "osl_fullbody_compliant_socket": ModelProfile(
+        source_xml=_BODY / "osl_fullbody_compliant_socket.xml",
+        output_xml=_BODY / "osl_fullbody_robot_compliant_socket.xml",
+        model_name="OSLFullBodyRobot",
         finger_joints=(),
-        position_servos=_NEW_POSITION_SERVOS,
-        osl_motors=_NEW_OSL_MOTORS,
+        position_servos=POSITION_SERVOS,
+        osl_motors=OSL_MOTORS,
         dimensions=(84, 83, 78, 106, 44, 29, 0),
     ),
 }
 
 
 def _resolve(name: str) -> ModelProfile:
-    """The profile for ``name``, with the new models' finger list filled in."""
+    """The profile for ``name``, with the finger list filled in."""
     profile = MODELS[name]
     if not profile.finger_joints:
-        profile = dataclasses.replace(profile, finger_joints=_new_finger_joints())
+        profile = dataclasses.replace(profile, finger_joints=_finger_joints())
     return profile
 
 
@@ -323,18 +216,15 @@ def _strip_keyframes(spec: mujoco.MjSpec) -> None:
 
     A spec carrying explicit ``<key qpos=...>`` fails to compile once a joint goes:
     ``keyframe 'stand': invalid qpos size, expected 119, got 120``.  The official
-    export ships five (``stand``, ``walk_*``, ``squat``, ``lunge``); the
-    hand-assembled model has none, so this is a no-op there.
+    export ships five (``stand``, ``walk_*``, ``squat``, ``lunge``).
 
     ``spec.nkey = 0`` is the non-obvious half: ``<size nkey="5"/>`` allocates the
     slots independently of the ``<keyframe>`` entries, so without it the model
     keeps five all-zero keys -- and an all-zero qpos carries a zero root quaternion.
 
-    Guarded on there actually being keyframes, because the two halves are not
-    symmetric: the hand-assembled model declares ``<size nkey="1"/>`` (via
-    ``leg/assets/myolegs_assets.xml``) with no ``<keyframe>`` at all, and clearing
-    ``nkey`` unconditionally would drop that from its output and break byte-identical
-    regeneration.
+    Guarded on there actually being keyframes: a source may declare ``<size nkey>``
+    with no ``<keyframe>`` at all (the hand-assembled model on ``old_osl`` does), and
+    clearing ``nkey`` there would change its output for no reason.
     """
     keys = list(spec.keys)
     if not keys:
@@ -344,9 +234,7 @@ def _strip_keyframes(spec: mujoco.MjSpec) -> None:
     spec.nkey = 0
 
 
-def _delete_finger_joints(
-    spec: mujoco.MjSpec, finger_joints: tuple[str, ...] = FINGER_JOINTS
-) -> None:
+def _delete_finger_joints(spec: mujoco.MjSpec, finger_joints: tuple[str, ...]) -> None:
     joints = {joint.name: joint for joint in spec.joints}
     missing = set(finger_joints) - joints.keys()
     if missing:
@@ -427,16 +315,12 @@ def _rebase_assets(spec: mujoco.MjSpec, profile: "ModelProfile") -> None:
 
     The generated file lives in ``body/`` while ``_make_asset_paths_relative``
     writes filenames relative to the MODEL ROOT, so ``meshdir``/``texturedir`` have
-    to be ``..``.  The two sources disagree about how they get there:
-
-    * hand-assembled -- ``meshdir=".." texturedir=".."`` already, with filenames
-      like ``meshes/sacrum.stl``.  Everything below is an identity here, which is
-      what keeps that model's regeneration byte-identical.
-    * official export -- ``meshdir="../meshes"`` and no ``texturedir``, with bare
-      basenames like ``sacrum.stl``.  Repointing ``meshdir`` alone would resolve
-      those to ``body/../sacrum.stl``; leaving it alone would resolve the skybox
-      (which arrives absolute, via the scene include) to ``body/scene/...``.  So
-      the subdirectory has to move out of ``meshdir`` and into each filename.
+    to be ``..``.  The vendored source has ``meshdir="../meshes"`` and no
+    ``texturedir``, with bare basenames like ``sacrum.stl``.  Repointing ``meshdir``
+    alone would resolve those to ``body/../sacrum.stl``; leaving it alone would
+    resolve the skybox (which arrives absolute, via the scene include) to
+    ``body/scene/...``.  So the subdirectory moves out of ``meshdir`` and into each
+    filename.  A source already at ``meshdir=".."`` passes through unchanged.
     """
     asset_root = profile.asset_root.resolve()
     mesh_root = (profile.source_xml.parent / (spec.meshdir or ".")).resolve()

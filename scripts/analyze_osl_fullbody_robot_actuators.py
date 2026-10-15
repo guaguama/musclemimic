@@ -98,7 +98,7 @@ def sizing_basis(profile: "_gen.ModelProfile") -> tuple[mujoco.MjModel, bool]:
     low at ``deviation_*`` / ``flexion_*``; deleting the 40 finger joints first
     brings it to **4.16e-10**.  The gap was never the muscles -- they and their
     tendons contribute no inertia -- it was the free hand DoFs absorbing the
-    acceleration that a welded hand does not.  ``test_new_osl_fullbody_robot.py``
+    acceleration that a welded hand does not.  ``test_osl_fullbody_robot.py``
     pins that equivalence so this shortcut cannot silently rot.
     """
     if profile.output_xml.exists():

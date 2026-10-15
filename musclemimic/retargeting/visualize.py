@@ -30,9 +30,7 @@ def parse_arguments():
         choices=[
             "MyoBimanualArm",
             "MyoFullBody",
-            "MyoLeg80_OSL_KA",
             "OSLFullBody",
-            "NewOSLFullBody",
         ],
         default="MyoFullBody",
         help="Model type to use",
@@ -297,12 +295,11 @@ def main():
     if args.model == "MyoBimanualArm":
         env_params["goal_type"] = "GoalBimanualTrajMimicv2"
         env_params["goal_params"] = goal_params
-    elif args.model in ("MyoFullBody", "MyoLeg80_OSL_KA", "OSLFullBody", "NewOSLFullBody"):
-        # MyoLeg80_OSL_KA, OSLFullBody and NewOSLFullBody subclass MyoFullBody and use the
-        # same goal type.  Note "OSLFullBody" contains neither "MyoFullBody" nor "MyoLeg" as
-        # a substring, so it has to be listed explicitly -- the same naming pitfall as the
-        # site-mapper and validation-video-recorder branches.  (Those two dispatch on
-        # substrings, so "NewOSLFullBody" reaches them for free; this one does not.)
+    elif args.model in ("MyoFullBody", "OSLFullBody"):
+        # OSLFullBody subclasses MyoFullBody and uses the same goal type.  "OSLFullBody"
+        # does not contain "MyoFullBody" as a substring, so it is listed explicitly --
+        # the same naming pitfall as the site-mapper and validation-video-recorder
+        # branches.
         env_params["goal_type"] = "GoalTrajMimicv2"
         env_params["goal_params"] = goal_params
 

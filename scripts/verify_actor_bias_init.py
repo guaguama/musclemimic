@@ -1,7 +1,6 @@
 """Reproduce fresh PPO smokes and paired pre-update survival comparisons.
 
 Run each model in a separate process to release compiled GPU executables:
-  python scripts/verify_actor_bias_init.py --model legacy
   python scripts/verify_actor_bias_init.py --model rigid
   python scripts/verify_actor_bias_init.py --model compliant
 
@@ -35,7 +34,7 @@ from musclemimic.runner.engine import (
 
 
 def configuration(model):
-    name = "conf_osl_fullbody_robot" if model == "legacy" else "conf_new_osl_fullbody_robot"
+    name = "conf_osl_fullbody_robot"
     overrides = [
         "experiment.env_params.num_envs=8",
         "experiment.total_timesteps=20480",
@@ -120,7 +119,7 @@ def survival(env, agent_conf, seeds):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=("legacy", "rigid", "compliant"), required=True)
+    parser.add_argument("--model", choices=("rigid", "compliant"), required=True)
     parser.add_argument("--output-dir", type=Path, default=Path("/tmp/actor_bias_verification"))
     parser.add_argument("--survival-only", action="store_true")
     parser.add_argument("--training-only", action="store_true", help="Reuse this model's saved survival measurements")

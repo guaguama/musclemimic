@@ -1,6 +1,6 @@
-"""Tests for the vendored official full-body + OSL model (models/new_osl_fullbody).
+"""Tests for the vendored full-body + OSL model (models/osl_fullbody).
 
-Part 1 asserts the *model* only -- no environment class exists yet.  The load
+These assert the *model* only; the environment has its own tests.  The load
 bearing assertion is the rigid/compliant coupling with ``mjDSBL_EULERDAMP``:
 the whole reason two variants are generated is that socket compliance is what
 forces Euler damping to stay implicit, and the official rigid socket does not.
@@ -22,7 +22,7 @@ import mujoco
 import numpy as np
 import pytest
 
-from scripts import vendor_new_osl_fullbody_model as vendor
+from scripts import vendor_osl_fullbody_model as vendor
 
 
 TIMESTEP = 0.002  # OSLFullBody.__init__ default; every stability number doubles from the XML's 1 ms
@@ -232,7 +232,7 @@ def test_socket_compliance_parameters_match_the_hand_built_model(compliant_model
 
 
 def test_euler_damping_is_needed_only_for_the_compliant_socket(rigid_model, compliant_model):
-    """The claim Part 2 relies on to drop the OSL environments' EULERDAMP workaround."""
+    """The claim OSLFullBody relies on to disable Euler damping on the rigid socket."""
     rigid_ratio = _worst_damping_ratio(rigid_model)
     compliant_ratio = _worst_damping_ratio(compliant_model)
     assert rigid_ratio < 1.0, f"rigid socket no longer inside the Euler bound: {rigid_ratio}"
@@ -263,7 +263,7 @@ def test_warp_backend_stability_without_euler_damping():
     Single-world on purpose.  Divergence is a per-world numerical property, and
     hand-batching an ``impl="warp"`` Data is not a supported operation -- the real
     batching happens inside ``MjxMujoco`` (musclemimic/core/mujoco_mjx.py:87-118),
-    which does not exist for this model until Part 2.
+    which this test bypasses on purpose.
     """
     jax = pytest.importorskip("jax")
     import jax.numpy as jnp

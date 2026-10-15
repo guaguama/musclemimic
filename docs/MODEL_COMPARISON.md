@@ -6,6 +6,11 @@ against LocoMuJoCo's joint-actuated skeleton.*
 Analysis date: 2026-08-27. All numbers below are measured from compiled `MjModel` objects, not read
 from XML text. Method and reproduction commands are in §8.
 
+Scope note (2026-10-14): §1 to §8 audit the hand-assembled `osl_fullbody` model and its robot twin
+(v1), and §9 covers the myo_sim 0.2.2 export `new_osl_fullbody` (v2). Both models now live on the
+`old_osl` branch, so file paths in those sections refer to that branch. §10 describes the current
+`models/osl_fullbody` (v3) and how it differs from v2.
+
 ---
 
 ## 1. Answer in brief
@@ -596,7 +601,7 @@ Caveats worth carrying forward:
 
 ---
 
-## 9. The official MyoAssist model (`models/new_osl_fullbody`)
+## 9. The official MyoAssist model, v2 (`models/new_osl_fullbody`, now on `old_osl`)
 
 Added 2026-08-27. NeuMoVe Lab shipped an official full-body + OSL model, vendored here by
 `scripts/vendor_new_osl_fullbody_model.py` (see `models/new_osl_fullbody/README.md` for
@@ -660,9 +665,57 @@ official model's `conaffinity=1` OSL mesh geoms producing more candidate pairs t
 
 ### 9.3 Reproduction
 
+On the `old_osl` branch:
+
 ```bash
 .venv/bin/python scripts/vendor_new_osl_fullbody_model.py --check
 .venv/bin/python -m pytest tests/unit/test_new_osl_fullbody_model.py -v
 CUDA_VISIBLE_DEVICES=0 .venv/bin/python -m pytest \
     tests/unit/test_new_osl_fullbody_model.py -m integration -v   # the Warp table above
+```
+
+---
+
+## 10. The current model, v3 (`models/osl_fullbody`)
+
+Added 2026-10-14. v3 is the same `assist_sim combine myofullbody OpenSourceLeg_KA_L1` export as v2,
+regenerated with myo_sim 0.2.3, plus one hand edit. It is vendored by
+`scripts/vendor_osl_fullbody_model.py` with the same four mechanical edits as v2; provenance is in
+`models/osl_fullbody/README.md`. The environment classes keep v2's code under the names
+`OSLFullBody`, `MjxOSLFullBody`, `OSLFullBodyRobot`, and `MjxOSLFullBodyRobot`.
+
+### 10.1 Differences from v2
+
+The myo_sim 0.2.3 export changes nine lines. Two left-knee coupling polycoefs
+(`knee_angle_translation2_constraint_l`, `knee_angle_rotation3_constraint_l`) are negated, which
+fixes a left shank that sat 34 mm off the mirror of the right at the heel at 30 degrees of knee
+flexion and 61 mm at 90 degrees. The rest are wrap-geom positions on both arms and the
+`back_cylinder_l` radius. Mass, joint count, and meshes are unchanged.
+
+The hand edit lengthens the OSL tibial pylon by 22.5 mm, so the prosthetic sole reaches the same
+height below the hip as the intact one at qpos0. In v2 it sat 22.5 mm higher. Mass rises by 10.9 g
+to 82.28906 kg. Dimensions are unchanged: nq 120, nv 119, nu 403, nbody 106, five keyframes, 46
+explicit contact pairs.
+
+Neither change touches the socket, so §9.2 carries over: the worst `dof_damping * dt / M_ii` at
+2 ms is 0.995 (`ip_flexion_r`) on the rigid variant and 15.68 (`socket_rotation_3`) on the compliant
+one, re-measured on v3.
+
+### 10.2 Robot servo table
+
+The 27-servo table was re-derived on v3 with `scripts/analyze_osl_fullbody_robot_actuators.py`.
+Only `knee_angle_l` moved materially: its force limit drops from 545 to 440 N·m (Kp 1557.1 to
+1257.1), because the corrected knee coupling changes the left knee's muscle moment arms. Every
+other coordinate stays within rounding of v2, apart from `subtalar_angle_l` (135 to 130 N·m). The
+worst `Kd * dt / I` at 2 ms is 0.600 (`ankle_angle_l`) on both socket variants. The compliant variant
+reaches zeta 1.432 at `hip_adduction_r`: overdamped, not unstable.
+
+### 10.3 Reproduction
+
+```bash
+.venv/bin/python scripts/vendor_osl_fullbody_model.py --check
+.venv/bin/python scripts/generate_osl_fullbody_robot.py --model osl_fullbody --check
+.venv/bin/python scripts/generate_osl_fullbody_robot.py --model osl_fullbody_compliant_socket --check
+.venv/bin/python -m pytest tests/unit/test_osl_fullbody_model.py \
+    tests/unit/test_osl_fullbody_env.py tests/unit/test_osl_fullbody_robot.py -v
 ```

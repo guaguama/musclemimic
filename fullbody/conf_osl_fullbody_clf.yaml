@@ -1,5 +1,8 @@
 # CLF-based reward variant of conf_osl_fullbody.
 #
+# The socket toggle and the trajectory are inherited from conf_osl_fullbody; read its
+# header. Toggle with experiment.env_params.compliant_socket=true.
+#
 # Inherits everything from conf_osl_fullbody and replaces the DeepMimic exponential tracking
 # terms with a control-Lyapunov-function reward. This is a separately-tuned config on purpose:
 # switching reward_type alone would NOT drop the tracking terms, because the parent config sets

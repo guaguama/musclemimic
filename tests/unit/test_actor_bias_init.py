@@ -19,9 +19,6 @@ from musclemimic.algorithms.ppo.ppo import PPOJax
 from musclemimic.environments.humanoids import (
     MyoBimanualArm,
     MyoFullBody,
-    MyoLeg80_OSL_KA,
-    NewOSLFullBody,
-    NewOSLFullBodyRobot,
     OSLFullBody,
     OSLFullBodyRobot,
 )
@@ -35,7 +32,7 @@ def resolve(env, mode="qpos0", dim=None):
 
 @pytest.fixture(scope="module")
 def robots():
-    return [OSLFullBodyRobot(), NewOSLFullBodyRobot(), NewOSLFullBodyRobot(compliant_socket=True)]
+    return [OSLFullBodyRobot(), OSLFullBodyRobot(compliant_socket=True)]
 
 
 def test_robot_vectors(robots):
@@ -47,7 +44,6 @@ def test_robot_vectors(robots):
         "elv_angle": -0.155590,
         "shoulder_elv": -0.95,
         "shoulder_rot": -0.142701,
-        "elbow_flex": -0.95,
         "elbow_flexion": -0.95,
         "pro_sup": 0,
         "deviation": -3 / 7,
@@ -70,8 +66,7 @@ def test_robot_vectors(robots):
             stem = joint.removesuffix("_r").removesuffix("_l")
             assert bias[i] == pytest.approx(expected[stem], abs=3e-6), joint
         vectors.append(bias)
-    np.testing.assert_allclose(vectors[0], vectors[1], atol=1e-6, rtol=0)
-    np.testing.assert_array_equal(vectors[1], vectors[2])
+    np.testing.assert_array_equal(vectors[0], vectors[1])
 
 
 @pytest.mark.parametrize(
@@ -79,10 +74,8 @@ def test_robot_vectors(robots):
     [
         (MyoFullBody, {}),
         (MyoBimanualArm, {}),
-        (MyoLeg80_OSL_KA, {}),
         (OSLFullBody, {}),
-        (NewOSLFullBody, {}),
-        (NewOSLFullBody, {"compliant_socket": True}),
+        (OSLFullBody, {"compliant_socket": True}),
     ],
 )
 def test_muscle_environments_unchanged(cls, kwargs):
@@ -267,7 +260,7 @@ def test_config_precedence(mode):
 
 @pytest.mark.parametrize("compliant", [False, True])
 def test_neutral_stance_physics(compliant):
-    env = NewOSLFullBodyRobot(compliant_socket=compliant)
+    env = OSLFullBodyRobot(compliant_socket=compliant)
     model = env._model
     model.opt.timestep = 0.002
     servo = env._action_indices[:-2]

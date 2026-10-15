@@ -1,17 +1,38 @@
 # =============================================================================
-# Standalone training config for OSLFullBody — full-body muscle humanoid with the
-# OSL knee-ankle prosthesis on the right leg (MyoFullBody upper body + biological
-# left leg + OSL prosthetic right leg).
+# Standalone training config for OSLFullBody: the MyoAssist full-body model with the
+# OSL knee-ankle prosthesis (models/osl_fullbody, v3: myo_sim 0.2.3 export with the
+# OSL tibial pylon lengthened 22.5 mm to match the intact leg). The earlier v1/v2
+# models and their configs live on the old_osl branch.
 #
-# Modeled on conf_myoleg80_osl_ka.yaml (itself flattened from conf_fullbody +
-# conf_fullbody_gmr). Every training parameter is visible and editable in one place.
+# Flattened on purpose: every training setting is spelled out here, and the CLF and
+# robot configs inherit from this file. OmegaConf merges dicts, so a child config
+# cannot delete an inherited key (e.g. a joint_torque_weights entry), and
+# mj_jntname2qvelid RAISES on a joint name the model does not have.
 #
-# Key differences from conf_myoleg80_osl_ka.yaml:
-#   - env_name: MjxOSLFullBody
-#   - disable_fingers: true (this model HAS arms; the trajectory has no finger joints)
-#   - full 17-site full-body mimic set (not the 9-site lower-body set)
-#   - trajectories loaded DIRECTLY from pre-retargeted env-format .npz via traj_path
-#     (dataset_group: null) — no GMR/SMPL retargeting at runtime.
+# THE SOCKET TOGGLE
+#   compliant_socket: false (default) loads models/osl_fullbody/body/osl_fullbody.xml,
+#       the official rigid weld, nq 120 (80 fingerless).
+#   compliant_socket: true loads osl_fullbody_compliant_socket.xml, which adds the
+#       four compliant socket DoFs, nq 124 (84 fingerless).
+#   disable_eulerdamp follows `not compliant_socket` automatically: the rigid socket
+#   is inside the explicit-Euler bound (worst dof_damping*dt/M_ii = 0.995 at 2 ms) so
+#   damping may be explicit like plain MyoFullBody; the compliant socket reaches 15.68
+#   and needs implicit damping. Setting both true raises rather than diverging.
+#   Toggle on the CLI with experiment.env_params.compliant_socket=true.
+#   NOTE the toggle changes nq/nv and therefore the observation size; checkpoints do
+#   not transfer across it.
+#
+# TRAJECTORIES (generated for this model by the clipper repo, 2026-10-14):
+#     .../clipper/outputs/musclemimic/osl_fullbody/
+#         WalkingStraightForwards03_poses_crop0-521_z-0.0016_ankle-7_bioankle-5.npz
+#   522 frames @ 100 Hz, split_points [0, 522], 74/74 joint names in model order and
+#   17/17 mimic sites in sites_for_mimic order. Clipper vendors its own copy of
+#   models/osl_fullbody, and forward kinematics here must reproduce the clip's
+#   recorded site_xpos; see that model's README.md.
+#
+#   With compliant_socket: true the clip is still correct: it does not name the four
+#   socket DoFs, which the env pads to 0.0 (the neutral socket, i.e. exactly the
+#   rigid configuration). The name-coverage gate exempts those four and nothing else.
 #
 # Usage:
 #   uv run fullbody/experiment.py --config-name=conf_osl_fullbody
@@ -44,13 +65,18 @@ experiment:
         dataset_group: null
         trajectory_cache_type: "sparse"
         traj_path:
-          - /home/dmma/src/00_AMBER/00_projbackflip/clipper/outputs/musclemimic/osl_fullbody/WalkingStraightForwards03_poses_crop0-521_ankle-7.npz
+          - /home/dmma/src/00_AMBER/00_projbackflip/clipper/outputs/musclemimic/osl_fullbody/WalkingStraightForwards03_poses_crop0-521_z-0.0016_ankle-7_bioankle-5.npz
 
   # ===========================================================================
   # Environment
   # ===========================================================================
   env_params:
     env_name: MjxOSLFullBody
+    # Socket toggle — see the header. disable_eulerdamp tracks `not compliant_socket`
+    # unless set explicitly; compliant_socket=true + disable_eulerdamp=true raises.
+    compliant_socket: false
+    # disable_eulerdamp: false
+    strict_trajectory_joints: true
     headless: True
     horizon: 30000
     disable_fingers: true  # Model has bimanual arms; trajectory has no finger joints.
@@ -129,8 +155,8 @@ experiment:
       # Targets the OSL prosthetic motors (49.4x / 58.4x gear) so they stop driving
       # the model into the floor in early training. Other joints are unweighted.
       joint_torque_weights:
-        osl_knee_angle_r: 1e-5
-        osl_ankle_angle_r: 1e-5
+        OSL_KA_L1_osl_knee_angle_r: 1e-5
+        OSL_KA_L1_osl_ankle_angle_r: 1e-5
       use_mean_exp_reward: false
       sites_for_mimic:
         - pelvis_mimic
@@ -166,9 +192,9 @@ experiment:
     # Random Start Disabling
     # -------------------------------------------------------------------------
     th_params:
-      random_start: false
-      fixed_start_conf: [0, 0]
-      start_from_random_step: false
+      random_start: true
+      # fixed_start_conf: [0, 0]
+      start_from_random_step: true
 
   # ===========================================================================
   # Algorithm
@@ -333,7 +359,7 @@ experiment:
       dataset_group: null
       trajectory_cache_type: "sparse"
       traj_path:
-        - /home/dmma/src/00_AMBER/00_projbackflip/clipper/outputs/musclemimic/osl_fullbody/WalkingStraightForwards03_poses_crop0-521_ankle-7.npz
+        - /home/dmma/src/00_AMBER/00_projbackflip/clipper/outputs/musclemimic/osl_fullbody/WalkingStraightForwards03_poses_crop0-521_z-0.0016_ankle-7_bioankle-5.npz
     init_state_type: TrajInitialStateHandler
     terminal_state_type: MeanRelativeSiteDeviationTerminalStateHandler
     terminal_state_params:
