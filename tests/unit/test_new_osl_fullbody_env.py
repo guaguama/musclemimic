@@ -205,6 +205,18 @@ def test_coverage_gate_can_be_opted_out(rigid_env):
     rigid_env._assert_trajectory_covers_model_joints(covering)
 
 
+def test_load_trajectory_override_keeps_the_base_signature():
+    """ImitationFactory.make calls load_trajectory with every base keyword (motion_names
+    included), so an override that drops one fails at env construction."""
+    import inspect
+
+    from musclemimic.environments.base import LocoEnv
+
+    base = inspect.signature(LocoEnv.load_trajectory).parameters
+    override = inspect.signature(NewOSLFullBody.load_trajectory).parameters
+    assert list(override) == list(base)
+
+
 @pytest.mark.skipif(not _LEGACY_TRAJ.is_file(), reason="the clip lives outside this repo")
 def test_padded_trajectory_stays_on_one_backend():
     """Regression guard for the padding path's mixed-backend trajectory.

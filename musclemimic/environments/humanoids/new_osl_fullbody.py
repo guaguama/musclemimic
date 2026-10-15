@@ -47,6 +47,7 @@ fingers disabled), hence the observation size -- checkpoints are not portable ac
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import mujoco
@@ -257,6 +258,7 @@ class NewOSLFullBody(MyoFullBody):
         warn: bool = True,
         cache_type="full",
         site_names=None,
+        motion_names: Sequence[str | None] | None = None,
     ) -> None:
         """Refuse a trajectory that does not name every joint of this model.
 
@@ -272,7 +274,12 @@ class NewOSLFullBody(MyoFullBody):
             if names is not None:
                 self._assert_trajectory_covers_model_joints(names)
         super().load_trajectory(
-            traj=traj, traj_path=traj_path, warn=warn, cache_type=cache_type, site_names=site_names
+            traj=traj,
+            traj_path=traj_path,
+            warn=warn,
+            cache_type=cache_type,
+            site_names=site_names,
+            motion_names=motion_names,
         )
         self._normalize_trajectory_backend()
 

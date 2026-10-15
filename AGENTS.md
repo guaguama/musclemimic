@@ -91,59 +91,24 @@ interface or move the genuinely shared concept to a neutral lower layer.
 
 ## Documentation writing
 
-All documentation uses concise, factual, analytical prose and active voice.
-State claims directly. Replace rhetorical negation, contrastive pairings,
-subjective qualifiers, and explanatory padding with functional descriptions.
-Use no em dash or en dash. Reserve the ASCII hyphen for compound words,
-hyphenation, literal commands, configuration keys, and mathematical syntax.
-Rewrite clause breaks with a period, semicolon, colon, comma, or parentheses.
-Keep formatting minimal. Use prose and code blocks when they carry technical
-meaning. Omit tables, icons, emoji, decorative separators, marketing-style
-headings, and visual padding.
+Repo documentation (`docs/`, READMEs, docstrings) follows a strict prose style: no em or en
+dashes, no tables or emoji, active voice. The full rule is in
+`.memory/documentation-writing-style.md`; read it before writing documentation.
 
 ## Python project quality and code clarity
 
-- Goal: adopt project-grade quality norms common in high-volume open-source Python ML
-  libraries and reproducible research codebases.
+Style baselines (PEP 8, PEP 257, Google style, pytest conventions) and the reproducibility
+checklists this project aligns with are in `.memory/python-quality-baselines.md`.
 
-  Baseline references we align with:
-  - PEP 8 (style, naming, imports, line breaks, comments, and code layout).
-  - PEP 257 (docstring conventions).
-  - Google Python Style Guide (type annotations, naming, docstring style).
-  - TensorFlow code style and mature ML project contributor guidance
-    (lint/type-aware review habits).
-  - pytest conventions for test import/discovery and test fixtures.
-  - Reproducibility checklists (Nature ML checklist, Pineau v2.0, Yahoo recipe).
-
-- Constant and magic-value policy:
-  - Avoid non-obvious magic numbers in logic.
-  - Use named constants for domain thresholds, schedule points, buffer sizes, and
-    algorithmic defaults; use `UPPER_CASE` for shared module-level constants.
-  - If a literal must stay inline, annotate with intent/provenance in a short
-    comment (paper source, ablation choice, or hard API contract).
-  - Keep constants close to where they are consumed; when shared across modules,
-    promote them to explicit, owned config/constants modules.
-- Intent-first naming for structured payloads:
-  - Prefer explicit keys / fields over positional tuples for logs, rollout metrics,
-    and trainer outputs.
-  - Keep metric/logging schema explicit and stable; changes to schema should be
-    covered by tests and migration notes.
-- Comments and docstrings:
-  - Document units and scale for numeric operations in public boundaries:
-    e.g. `[m]`, `[rad]`, `[N]`, `[step]`, `[num_envs, num_joints]`.
-  - Keep comments concise, truthful, and updated when behavior changes.
-  - Use comments for branch intent, fallback reason, invariants, or numerical edge
-    constraints (not to restate obvious code).
-- Readability and maintainability:
-  - Prefer simple code over over-engineered abstractions; if a helper exists,
-    it should reduce complexity and test burden, not add indirection.
-  - Keep public interfaces explicit; add type annotations to new public functions.
-- Testing and reproducibility integration:
-  - Prioritize tests for behavior changes; keep tests deterministic and isolated.
-  - Use `tmp_path`/`tmp_path_factory` for filesystem-dependent tests in new code.
-  - Reproducibility artifacts should document: data provenance, preprocessing
-    choices, random-seed flow, hyperparameters, training dynamics, and
-    environment/commit references for experiments.
+- Avoid non-obvious magic numbers in logic. Use named `UPPER_CASE` constants for domain
+  thresholds, schedule points, buffer sizes, and algorithmic defaults; if a literal must stay
+  inline, comment its provenance.
+- Prefer explicit keys or fields over positional tuples for logs, rollout metrics, and trainer
+  outputs. Metric and logging schema changes need tests and migration notes.
+- Document units and scale at public boundaries, e.g. `[m]`, `[rad]`, `[N]`, `[step]`,
+  `[num_envs, num_joints]`.
+- Prefer simple code over abstractions; a helper must reduce complexity and test burden.
+- Keep tests deterministic and isolated; use `tmp_path`/`tmp_path_factory` for filesystem tests.
 
 ## JAX, MJX, and numerical code
 
@@ -229,19 +194,126 @@ make ci
 - In the handoff, summarize the behavior changed, list validation performed,
   and call out remaining risks or checks not run.
 
-## Reference guidance
+## Agent memory
 
-These sources informed this file; this repository's rules above are
-authoritative:
-- [JAX: Stateful computations](https://docs.jax.dev/en/latest/stateful-computations.html)
-- [JAX: Errors](https://docs.jax.dev/en/latest/errors.html)
-- [JAX: Benchmarking](https://docs.jax.dev/en/latest/benchmarking.html)
-- [PEP 8: Style Guide for Python Code](https://peps.python.org/pep-0008/)
-- [PEP 257: Docstring Conventions](https://peps.python.org/pep-0257/)
-- [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)
-- [TensorFlow Code Style Guide](https://www.tensorflow.org/community/contribute/code_style)
-- [PyTorch Lightning Contributing Guide](https://lightning.ai/docs/pytorch/stable/generated/CONTRIBUTING.html)
-- [pytest Good Integration Practices](https://pytest.org/en/8.0.x/explanation/goodpractices.html)
-- [Yahoo ML Reproducibility Guidelines](https://github.com/yahoo/ml-reproducibility-guidelines)
-- [Machine Learning Checklist (Nature)](https://www.nature.com/documents/machine-learning-checklist.pdf)
-- [Machine Learning Reproducibility Checklist v2.0](https://www.cs.mcgill.ca/~jpineau/ReproducibilityChecklist-v2.0.pdf)
+`.memory/` is shared working memory for every agent on this repo (Claude Code, Codex, or any
+other). It exists so the agent picking up a thread does not re-derive what the previous one
+already worked out.
+
+### Start of session
+
+Read `.memory/MEMORY.md`, then open the memories your task touches. This step is mandatory, and
+sync does not perform it. Sync reports whether two folders agree; it says nothing about what this
+session has read. "All in sync" on a cold session means nothing has been read.
+
+Claude Code keeps a second, native copy of these memories and imports changes through a
+`SessionStart` hook. Other agents have no native copy; `.memory/` is their only store, so they
+need no sync at startup.
+
+### Commands
+
+The Make/`.venv` workflow above does not apply to `.memory/sync.py`. It is a dependency-free
+stdlib script that must keep working when the project environment is broken, half-synced, or
+absent, which is when memory matters most. Call it with `python3`.
+
+- Claude Code: nothing at startup (the `SessionStart` hook pulls) and nothing after writing a
+  memory (the `Stop` hook pushes).
+- Any other agent: read `MEMORY.md` at startup; after writing or editing a memory, run
+  `python3 .memory/sync.py --repo-only`.
+
+`--repo-only` rebuilds `.memory/MEMORY.md` and writes nothing outside the working tree, so it
+needs no permissions beyond the repo. Claude imports those changes at its next session start.
+
+Sync reports changed memories as one `name: description` line each, never as full text: it runs
+before a session has a topic, so it cannot judge relevance. Open the files your task touches.
+`--print-bodies` dumps full text. `--resolve` cannot be combined with `--pull` or `--push`,
+because it moves whichever side it is told to keep.
+
+### What is worth writing
+
+Write a memory when a session produced something the next agent would otherwise rediscover the
+hard way:
+
+- a change and the reasoning behind it, especially a decision that could plausibly have gone
+  the other way
+- a problem hit and how it was resolved, including wrong turns worth not repeating
+- behavior of this codebase that is not visible from the code you would naturally read
+- a correction to something an earlier memory got wrong
+
+Do not write what the repo already records: file layout, what a function does, anything
+recoverable from `git log`.
+
+Write for the actual reader: a different agent, starting cold, mid-thread, with no transcript.
+State why, since the diff already shows what. Say plainly what is done, what is in progress, and
+what is untested.
+
+### When to write
+
+Write at checkpoints, not after every turn: a task or sub-task is finished, a decision is
+settled, a dead end is confirmed, or the user is handing off or ending the session. Also write
+whenever the user asks. Between checkpoints, keep notes in the conversation and fold them into
+one memory edit at the checkpoint. A routine turn (a question answered, a small fix, an
+exploratory read) needs no memory. Do not edit an existing memory, or bump its `updated`, just
+because the work touched its topic. Edit it only when its content is wrong or a checkpoint adds
+something substantive.
+
+### Format
+
+One file per topic, `kebab-case.md`, directly in `.memory/`:
+
+```markdown
+---
+name: dof-ordering-gotcha
+description: "One line. This is what lands in MEMORY.md, so make it the hook."
+metadata:
+  type: project
+  agent: claude
+  updated: 2026-09-16
+---
+
+Body. Bold the load-bearing gotcha. Separate what was verified from what was
+assumed. End with **How to apply:**. Link related memories as
+[[other-memory]]; a link to a memory that does not exist yet is fine, it
+marks something worth writing.
+```
+
+`type` is one of:
+
+- `project`: the work itself (what was built, why, where it stands, what is open). The default.
+- `reference`: durable facts that hold regardless of the current goal (codebase mechanics,
+  dataset locations, external sources).
+- `feedback`: a rule the user gave about how to work. Include why, and how to apply it.
+- `user`: something about the user that changes how work should be done here.
+
+Optional `title:` overrides the index title derived from `name`. Memory files are working notes
+and are exempt from the documentation prose style; tables and dashes are fine there.
+
+### Rules
+
+- One topic per file, amended in place. When a checkpoint adds to an existing memory, edit that
+  file and bump `updated` rather than adding a near-duplicate. Correct wrong claims in place;
+  do not leave them standing next to the fix.
+- Set `agent:` to yourself when you write or amend a file, so a claim can be traced back.
+- Keep files under about 150 lines. Past that, split by sub-topic and link the pieces.
+- Never hand-edit `.memory/MEMORY.md`. It is regenerated from every file's `name`, `title`,
+  `description`, and `type`. To change an index line, change the memory's `description`.
+- Regenerate the index after writing, per the commands above.
+
+### Conflicts
+
+Sync compares the shared copy, the native copy, and the hashes recorded at the last sync. A file
+changed on one side is copied. A file changed on both sides is a conflict: neither copy is
+overwritten, a unified diff is printed, and sync exits non-zero.
+
+Resolving means making both copies byte-identical. Editing only one side leaves the conflict
+standing, because on the next run neither copy matches the recorded hash. Write the merged text
+to both, or run `python3 .memory/sync.py --resolve shared|native` to keep one side wholesale.
+
+Conflicts are rare here; the usual pattern is one agent handing off to another, not two writing
+at once.
+
+### Git
+
+`.memory/` is deliberately untracked (listed in `.git/info/exclude`, so there is zero committed
+diff). `origin` is the `guaguama/musclemimic` fork and `upstream` is `amathislab/musclemimic`;
+working memory does not belong in either history. Never `git add -f .memory`.
